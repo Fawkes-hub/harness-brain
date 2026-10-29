@@ -209,19 +209,30 @@ Rules of thumb: **never expose 8790 directly to the internet**; if you put a pro
 
 ## Backups (do this on day one)
 
-The store is a git repo, so backups are git plus one encrypted archive:
+The store is a git repo but **a git remote is not a backup**: a hosting provider can read a private
+repo, one mis-click makes it public, and a force-push rewrites history. So:
+
+| Layer | What | Where | How often |
+|---|---|---|---|
+| L1 | commit the working tree | same disk | 30 min |
+| L2 | mirror the history | **a different physical disk** | with L1 |
+| L3 | one encrypted, self-contained archive | local + **two heterogeneous remotes** | daily |
+| L4 | restore drill | scratch dir | weekly |
 
 ```bash
-# L1 every 30 min: commit what changed
-BRAIN_ROOT=/srv/brain ./bin/brain sync --message "auto: $(date -Is)"
-# L2 push to a PRIVATE remote
-git -C /srv/brain push --quiet origin main
-# L3 nightly: bundle everything, then encrypt
-git -C /srv/brain bundle create /backup/brain-$(date +%F).bundle --all
-age -r <recipient> -o /backup/brain-$(date +%F).bundle.age /backup/brain-$(date +%F).bundle
+# L3 in three lines (see docs/BACKUP.md for the real thing)
+tar --sort=name -cf - . | zstd -19 -T0 \
+| age -R recipients.txt -o "brain-$(printf '%06d' "$SEQ").age"
 ```
 
-Restore drill monthly: unpack a bundle into a scratch dir, run `brain verify`, expect five green checks.
+Hard rules: **plaintext atoms never leave the machine** (not even to a private repo); the age private
+key never lives next to the ciphertext; every archive carries a signed manifest with a
+`prev_cipher_sha256` hash chain so a rollback is detectable; and a backup counts as successful only
+when you have **restored it and `brain verify` printed five green checks**.
+
+Full reference design — threat model, packaging, key handling, retention, alerting without an LLM in
+the loop, privacy tiers, credential minimisation, first-24-hours playbook, anti-patterns:
+**[docs/BACKUP.md](docs/BACKUP.md)**.
 
 ## Configuration
 
@@ -303,7 +314,18 @@ brain search "预发"             # 之后再找回来
 
 ### 备份
 
-库本身就是 git 仓库,备份 = git 推送私有远端 + 每天 `git bundle` 后用 `age` 加密归档。**每月做一次恢复演练**:把 bundle 解开到临时目录,跑 `brain verify`,五项全绿才算数。
+库本身是 git 仓库,但**"有个 git 远端"不等于备份**:托管方能读私有仓、一次误设就变公开、force-push 会改写历史。所以分四层:
+
+| 层 | 干什么 | 存哪 | 频率 |
+|---|---|---|---|
+| L1 | 提交工作区 | 同一块盘 | 30 分钟 |
+| L2 | 历史镜像 | **另一块物理盘** | 随 L1 |
+| L3 | 一个加密的自包含整包 | 本地 + **两处异构远端** | 每天 |
+| L4 | 恢复演练 | 临时目录 | 每周 |
+
+硬规则:**明文 atom 永不出网**(私有仓也不行);age 私钥不与密文同机常驻;每份快照带签名 manifest + `prev_cipher_sha256` 哈希链,回滚能被发现;只有**真恢复过一次、`brain verify` 五项全绿**,才算备份成功。
+
+完整参考设计(威胁模型、打包方式、密钥、保留策略、不含 LLM 的告警链、隐私分级、凭据最小化、出事前 24 小时手册、反模式速查)见 **[docs/BACKUP.md](docs/BACKUP.md)**。
 
 ### 状态
 

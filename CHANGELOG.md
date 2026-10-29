@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 文档
+
+- **新增 `docs/BACKUP.md`(备份与恢复参考设计)**,并把 README 里"备份 = 推个私有远端"的旧口径
+  换掉——那个说法是错的:私有仓托管方可读、一次误设变公开、force-push 改历史。新文档给的是
+  四层模型(L1 提交 / L2 换盘镜像 / L3 单文件加密整包 / L4 每周演练)、签名 manifest + hash chain
+  抗回滚、不含 LLM 的告警链、隐私分级(L3/L4 连密文都不出本机)、凭据最小化、出事前 24 小时手册、
+  以及 10 条反模式速查。
+- 记牢两个实跑出来的坑:① 恢复后 `views/` 是空的,必须**先 `brain reindex` 再 `verify`**,
+  否则报 `views/.revision 与数据不一致`——这不是备份坏了,是流程少一步;② 某些 git 版本的
+  `git bundle verify` 要求当前目录本身是仓,恢复脚本里应改用 `git fsck` 或在临时仓里 verify。
+
 ### 计划中
 
 - v2.2 补齐:`secret add/exec`(age 多收件人)、persona 渲染进 `brief` 首段
