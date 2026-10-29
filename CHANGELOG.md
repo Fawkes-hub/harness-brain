@@ -12,6 +12,19 @@
 - v2.3:SQLite + FTS5(中文 bigram)检索、`scan` 增量重建、`/v1/stats`
 - v3.0:多库(namespace)、MCP Transport、`Store`/`Index` 接口化
 
+## [2.2.6] - 2026-10-29
+
+### 修复
+
+- **打了 tag 却没有 Release 页面**:`release.yml` 只推 GHCR 镜像,不建 GitHub Release,
+  于是 v2.2.3~v2.2.5 有 tag 有镜像、点进 Releases 却看不到。现在打 tag 时自动
+  从本文件抽取该版本小节建 Release(标题 = tag,正文 = 本节 + 镜像坐标),
+  已存在则跳过,可安全重跑。
+
+### 变更
+
+- `release.yml` 增加 `contents: write`(建 Release 需要)。
+
 ## [2.2.5] - 2026-10-29
 
 这一版是**按 README 从零走一遍**走出来的:凡是文档写了、实际跑不通的,全部修掉。

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write      # 建 Release 需要;镜像推 GHCR 需要 packages: write
   packages: write
 
 jobs:
@@ -43,6 +43,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 从 CHANGELOG 抽本节
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - "$GITHUB_REF_NAME" > /tmp/notes.md <<'PY'
+          import re, sys, pathlib
+          tag = sys.argv[1]
+          ver = tag[1:] if tag.startswith("v") else tag
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(r"^## \[" + re.escape(ver) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
+                        text, re.S | re.M)
+          print((m.group(1).strip() if m else "") or f"Release {ver}")
+
+      - name: 建 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && echo "Release 已存在,跳过" && exit 0
+          printf '\n**容器镜像**:`ghcr.io/%s:%s`(linux/amd64, linux/arm64)\n' \
+            "${{ github.repository }}" "$GITHUB_REF_NAME" >> /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/notes.md
 
       - name: 摘要
         run: |
