@@ -41,12 +41,12 @@
 
 ## 2. 身份与令牌
 
-- 令牌在 NAS 侧签发:`brain token issue --host mac --harness pi --role engineer --scope read,write --ttl 365d`
+- 令牌在服务器侧签发:`brain token issue --host laptop --harness pi --role engineer --scope read,write --ttl 365d`
   **scope 全集**:`read` / `write` / `secret` / `admin`(逗号分隔;`admin` 隐含 `write`,`secret` 不隐含 `read`)
   → 打印一次明文,`state/tokens.json` 存 `sha256(salt || token)` + 前缀 + 身份 + `expires`。
   **必须加盐**(无盐哈希对短 token 可查表反推),盐随 `--init` 生成并存在同一文件里。
 - 服务端**从令牌反查身份**,请求体里的 `author` 一律忽略(客户端自报无效)。
-- 响应带 `X-Brain-Identity: mac/pi/engineer`。
+- 响应带 `X-Brain-Identity: laptop/pi/engineer`。
 - 吊销:`brain token revoke <token_id>`;轮换:吊销 + 重新签发,旧令牌立即失效。
 - **过期**:超过 `expires` → `401 token_expired`(不是 `unauthorized`,便于客户端区分"该换票"和"配错了")。
 - 端侧配置**只有一个文件** `~/.config/brain/config.toml`(0600),不单独放 token 文件:
@@ -183,7 +183,7 @@ role  = "engineer"
 
 ```json
 { "since": "7d",
-  "entries": [ { "occurred_at": "2026-10-16T22:00:00+08:00", "author": "mac/dsh/engineer",
+  "entries": [ { "occurred_at": "2026-10-16T22:00:00+08:00", "author": "laptop/dsh/engineer",
                  "did": "讨论换机箱", "conclusion": "只换散热器",
                  "todo": ["比价 emachines V500"], "open": ["预算上限未定"] } ] }
 ```
@@ -253,7 +253,7 @@ role  = "engineer"
 { "items": [ { "id": "m_…", "ttl": "2026-10-01", "topic": "network", "days_overdue": 17 } ] }
 ```
 
-供 `brain stale` 与每周报告使用。`ttl` 在查询时判定,时区固定 `Asia/Shanghai`。
+供 `/v1/stale` 与每周报告使用。`ttl` 在查询时判定,时区固定 `Asia/Shanghai`。
 
 ### 3.8d `GET /v1/conflicts`
 

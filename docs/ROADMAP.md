@@ -7,7 +7,7 @@
 
 ## 外部依赖
 
-- **age CLI**:v2.2 的加密与轮换用它(`apt install age` / `brew install age`),当前 NAS **未安装**。
+- **age CLI**:v2.2 的加密与轮换用它(`apt install age` / `brew install age`),当前服务器 **未安装**。
   Python 侧只通过 `subprocess` 调用,不引 PyPI 包 —— 所以「零依赖」只对 v2.0/v2.1 成立,部署文档要写清。
 - 其余全部 Python stdlib。
 
@@ -83,7 +83,7 @@ curl -s -H "Authorization: Bearer $T" localhost:8790/v1/whoami | jq -e '.host=="
 curl -s -o /dev/null -w "%{http_code}\n" localhost:8790/v1/brief   # 期望 401
 # 4 幂等(SPEC §5 全部场景)
 bash tools/test-idempotency.sh                                      # 期望 ALL PASS
-# 5 Mac 不挂载也能用(注意:此时 brief 还没有角色段,persona 在 v2.2)
+# 5 笔记本不挂载也能用(注意:此时 brief 还没有角色段,persona 在 v2.2)
 ssh mac 'brain brief | head -3'                                     # 期望出现"规范"段
 # 6 离线队列
 systemctl stop brain; ssh mac 'brain remember "离线测试" -k fact'; systemctl start brain

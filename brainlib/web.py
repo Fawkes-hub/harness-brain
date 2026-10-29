@@ -605,7 +605,7 @@ def dashboard(ctx: Ctx, health: dict, recent: list[Atom], review: list[dict],
 </div><p class="hint">⌘/Ctrl + Enter 提交 · 写入后 atom 不可修改,更正请用「写更正」</p>
 </form></div></section>"""
 
-    return f"""{page_head("概览", f"共 {shown} 条记忆 · {len(tags)} 个主题 · 数据在 NAS 本地", eyebrow=when(last_rebuild) + " 最近重建")}
+    return f"""{page_head("概览", f"共 {shown} 条记忆 · {len(tags)} 个主题 · 数据在服务器本地", eyebrow=when(last_rebuild) + " 最近重建")}
 {alert}{stats}
 <div class="grid grid-2">
 <div class="stack">{recent_card}</div>
@@ -1062,9 +1062,9 @@ def login(error: str = "", next_path: str = "") -> str:
 <div class="login-wrap">
   <section class="login-brand">
     <div class="brand login-logo"><span class="brand-mark">{icon("network", 22)}</span>
-      <span class="brand-text"><span class="brand-name">共享记忆库</span><span class="brand-sub">BRAIN · NAS</span></span></div>
+      <span class="brand-text"><span class="brand-name">共享记忆库</span><span class="brand-sub">BRAIN · 服务器</span></span></div>
     <h1>一套记忆,多台主机,<br>多个 harness 共用。</h1>
-    <p>不可变的 atom、可重建的视图、可追溯的取代链。浏览器只是一个管理入口,真相始终在 NAS 上的纯文本里。</p>
+    <p>不可变的 atom、可重建的视图、可追溯的取代链。浏览器只是一个管理入口,真相始终在服务器上的纯文本里。</p>
     <ul class="login-points">
       <li>{icon("database", 17)}<span>事实、规范与踩坑,集中在一处</span></li>
       <li>{icon("shield", 17)}<span>令牌分权,吊销即失效,审计只追加</span></li>
@@ -1073,7 +1073,7 @@ def login(error: str = "", next_path: str = "") -> str:
   </section>
   <section class="login-panel">
     <h2>用令牌登录</h2>
-    <p class="muted">令牌由 NAS 侧签发(<code>brain token issue …</code>),登录后写入 HttpOnly cookie,有效期 7 天。</p>
+    <p class="muted">令牌由服务器侧签发(<code>brain token issue …</code>),登录后写入 HttpOnly cookie,有效期 7 天。</p>
     {err}
     <form method="post" action="/login" class="login-form">
       {nxt}
@@ -1081,7 +1081,7 @@ def login(error: str = "", next_path: str = "") -> str:
       <input id="token" type="password" name="token" placeholder="bk_…" autocomplete="off" spellcheck="false" autofocus required></div>
       <button class="btn primary" type="submit">登录 {icon("arrow", 16)}</button>
     </form>
-    <p class="hint">没有令牌?在 NAS 上执行 <code>brain token issue --host mac --harness pi --role engineer</code>。</p>
+    <p class="hint">没有令牌?在服务器上执行 <code>brain token issue --host laptop --harness pi --role engineer</code>。</p>
   </section>
 </div>
 <script>{MAIN_JS}</script>

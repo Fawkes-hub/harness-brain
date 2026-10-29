@@ -1,4 +1,4 @@
-"""远端客户端 CLI:给 Mac/手机用,不需要本地数据目录。"""
+"""远端客户端 CLI:给笔记本/手机用,不需要本地数据目录。"""
 from __future__ import annotations
 
 import argparse

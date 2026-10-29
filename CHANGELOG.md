@@ -12,6 +12,36 @@
 - v2.3:SQLite + FTS5(中文 bigram)检索、`scan` 增量重建、`/v1/stats`
 - v3.0:多库(namespace)、MCP Transport、`Store`/`Index` 接口化
 
+## [2.2.5] - 2026-10-29
+
+这一版是**按 README 从零走一遍**走出来的:凡是文档写了、实际跑不通的,全部修掉。
+
+### 修复
+
+- **`serve` 自动初始化空库后不建视图**:骨架建好了但 `views/.revision` 没写,
+  `docker exec brain brain verify` 一上来就报「views/.revision 与数据不一致,需 reindex」。
+  现在自动初始化后立刻 `rebuild()`,新库出生即「五项全过」。
+- **服务端连不上时直接吐 traceback**:`brief` / `search` / `forget` 只捕获 `HTTPError`,
+  `Connection refused` / DNS 失败这类 `URLError` 会以 Python 堆栈糊在用户脸上。
+  现在统一走 `client_call()`:传输失败返回 `code=0`,由调用方决定 —— `remember` 进离线队列,
+  `brief` / `search` 在本地有库时**回退本地**并提示一行,`forget` 给一句人话错误。
+- **`brain brief --budget` 不认**:README 与 CLI 自己的结尾提示都写 `--budget`,
+  但解析器只有 `--max-chars`,照抄文档就报 `unrecognized arguments`。
+  现在两者等价(`--budget` 为别名,`dest` 不变)。
+
+### 文档
+
+- `examples/SKILL.md` 重写为 v2 口径:去掉 v1 遗留(`inbox/archive/`、`consolidate` 当日常维护),
+  补 `forget` / `restore` / `--supersedes` 的"只追加、不改写"协议,`-k` 类型补 `journal`,
+  `--ttl` 的复核入口改为实际存在的 `GET /v1/stale`(此前文档写的是并不存在的 `brain stale`)。
+- 泛化残留术语:`NAS` → 服务器、`Mac` → 笔记本、`路由` → 边缘网关(含管理台 UI 文案与示例身份
+  `laptop/pi/engineer`)。
+
+### 测试
+
+- 单测 62 → 65:`serve` 在空库上自建并 `verify` 五项全过、`brief --budget`、`brief --max-chars`
+  (后两个用例顺带守住了"连不上服务端不能吐 traceback")。
+
 ## [2.2.4] - 2026-10-29
 
 ### 修复

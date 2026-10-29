@@ -308,7 +308,7 @@ def cmd_brief(a: argparse.Namespace) -> int:
         out = ""
     if not out:
         if dropped:
-            print(f"预算 {budget} 字符连 persona/rules 都放不下;请调大 --max-chars,"
+            print(f"预算 {budget} 字符连 persona/rules 都放不下;请调大 --budget,"
                   f"或直接用 `brain show rules.md`。")
             return 3
         print("(记忆库还是空的)")
@@ -488,13 +488,36 @@ def _atom_from_args(a) -> "object":
     return at
 
 
+def client_call(cfg: dict, method: str, path: str, payload=None):
+    """统一走 HTTP;传输层失败**不抛异常**(否则界面上就是一段 traceback)。
+
+    返回 (code, data)。code == 0 表示"连不上服务端",由调用方决定是回退本地库、
+    进 outbox,还是直接报错。
+    """
+    from brainlib.client import request
+    try:
+        return request(cfg, method, path, payload)
+    except (OSError, TimeoutError) as e:      # URLError 是 OSError 的子类
+        return 0, {"error": {"code": "offline",
+                             "message": f"{type(e).__name__}: {e}"}}
+
+
+def client_replay(cfg: dict) -> None:
+    """尽力把离线队列推上去;连不上就算了,不影响本次命令。"""
+    from brainlib.client import replay
+    try:
+        replay(cfg)
+    except (OSError, TimeoutError):
+        pass
+
+
 def v2_remember(a) -> int:
     cfg = _client_cfg()
     if cfg:
-        from brainlib.client import append_outbox, replay, request
+        from brainlib.client import append_outbox
         from brainlib.model import new_id, now_iso
 
-        replay(cfg)
+        client_replay(cfg)
         body = " ".join(a.text).strip()
         if not body:
             print("没有内容可记。", file=sys.stderr)
@@ -506,9 +529,8 @@ def v2_remember(a) -> int:
                "supersedes": getattr(a, "supersedes", None),
                "ttl": getattr(a, "ttl", None),
                "occurred_at": now_iso()}
-        try:
-            code, data = request(cfg, "POST", "/v1/remember", rec)
-        except (OSError, TimeoutError):
+        code, data = client_call(cfg, "POST", "/v1/remember", rec)
+        if code == 0:
             append_outbox(rec)
             print(f"服务不可达,已离线暂存: {rec['id']}(下次命令自动重放)")
             return 0
@@ -533,11 +555,13 @@ def v2_remember(a) -> int:
 def v2_forget(a) -> int:
     cfg = _client_cfg()
     if cfg:
-        from brainlib.client import replay, request
-        replay(cfg)
-        code, data = request(cfg, "POST", "/v1/forget",
-                             {"id": a.id, "status": a.status, "reason": a.reason,
-                              "replaced_by": getattr(a, "replaced_by", None)})
+        client_replay(cfg)
+        code, data = client_call(cfg, "POST", "/v1/forget",
+                                 {"id": a.id, "status": a.status, "reason": a.reason,
+                                  "replaced_by": getattr(a, "replaced_by", None)})
+        if code == 0:
+            print(f"服务端不可达:{cfg['url']}({data['error']['message']})", file=sys.stderr)
+            return 1
         print(f"{code} {data}")
         return 0 if code in (200, 201) else 2
 
@@ -579,14 +603,15 @@ def v2_verify(a) -> int:
 def v2_brief(a) -> int:
     cfg = _client_cfg()
     if cfg:
-        from brainlib.client import replay, request
-        replay(cfg)
-        code, data = request(cfg, "GET", f"/v1/brief?budget={a.max_chars}&index_rows={a.index_rows}")
+        client_replay(cfg)
+        code, data = client_call(cfg, "GET", f"/v1/brief?budget={a.max_chars}&index_rows={a.index_rows}")
         if code == 200:
             print(data if isinstance(data, str) else json.dumps(data, ensure_ascii=False, indent=2))
             return 0
-        print(f"{code} {data}", file=sys.stderr)
-        return 3 if code == 413 else 1
+        if code != 0 or not (ROOT / "atoms").exists():
+            print(f"{code} {data}", file=sys.stderr)
+            return 3 if code == 413 else 1
+        print(f"(服务端不可达:{cfg['url']},改用本地库)", file=sys.stderr)
 
     st = _store()
     st.rebuild()
@@ -613,7 +638,7 @@ def v2_brief(a) -> int:
     else:
         out = ""
     if not out:
-        print(f"预算 {budget} 字符连 rules 都放不下;请调大 --max-chars。")
+        print(f"预算 {budget} 字符连 rules 都放不下;请调大 --budget。")
         return 3
     print(out)
     if dropped:
@@ -622,22 +647,24 @@ def v2_brief(a) -> int:
 
 
 def v2_search(a) -> int:
+    """有服务端就让它排(带 score);连不上且本地有库,退回正则逐行检索。"""
+    q = " ".join(a.query)
     cfg = _client_cfg()
     if cfg:
-        from brainlib.client import replay, request
-        replay(cfg)
-        q = " ".join(a.query)
-        code, data = request(cfg, "GET", f"/v1/search?q={urllib.parse.quote(q)}&limit={a.limit}")
-        if code != 200:
+        client_replay(cfg)
+        code, data = client_call(cfg, "GET", f"/v1/search?q={urllib.parse.quote(q)}&limit={a.limit}")
+        if code == 200:
+            hits = data.get("hits", [])
+            for h in hits:
+                print(f"{h['id']}  {h['occurred_at'][:10]}  {h['author']}  {h['snippet']}")
+            if not hits:
+                print(f"没找到 `{q}`。")
+                return 1
+            return 0
+        if code != 0 or not (ROOT / "atoms").exists():
             print(f"{code} {data}", file=sys.stderr)
             return 1
-        hits = data.get("hits", [])
-        for h in hits:
-            print(f"{h['id']}  {h['occurred_at'][:10]}  {h['author']}  {h['snippet']}")
-        if not hits:
-            print(f"没找到 `{q}`。")
-            return 1
-        return 0
+        print(f"(服务端不可达:{cfg['url']},改用本地检索)", file=sys.stderr)
 
     """默认只搜「可见」的 atom:已遗忘/已撤回的不出现(它们仍在库与 git 里,可追溯)。"""
     q = " ".join(a.query)
@@ -713,6 +740,10 @@ def v2_serve(a) -> int:
     if not (ROOT / "atoms").exists():
         made = ensure_layout(ROOT)
         print(f"空库,已初始化骨架: {'、'.join(made) or '无'} (根={ROOT})", flush=True)
+        # 空库也是有视图的(空 rules.md / 空 INDEX.md);不写 views/.revision 的话
+        # `brain verify` 一上来就报「视图与数据不一致」——容器第一次启动的默认路径。
+        rev = _store().rebuild()
+        print(f"视图已生成 revision={rev[:20]}…", flush=True)
     serve(ROOT, a.bind, a.port)
     return 0
 
@@ -770,7 +801,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("brief", help="输出会话开头该读的摘要")
-    b.add_argument("--max-chars", type=int, default=6000)
+    b.add_argument("--max-chars", "--budget", dest="max_chars", type=int, default=6000,
+                   help="首段输出预算(字符);--budget 是别名")
     b.add_argument("--recent", type=int, default=5)
     b.add_argument("--index-rows", type=int, default=12, help="事实索引最多列几行")
     b.set_defaults(func=cmd_brief)

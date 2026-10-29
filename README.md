@@ -62,7 +62,7 @@ docker run -d --name brain \
   -v brain-data:/data \
   --restart unless-stopped \
   --memory 256m \
-  ghcr.io/Fawkes-hub/harness-brain:2.2.4
+  ghcr.io/Fawkes-hub/harness-brain:2.2.5
 ```
 
 Data lives in the named volume `brain-data`, so there is nothing to prepare. The service
@@ -173,7 +173,7 @@ tags: [deploy, staging]
 occurred_at: 2026-10-29T09:12:00+08:00
 recorded_at: 2026-10-29T09:13:04+08:00
 author: { host: laptop, harness: cli, role: engineer }
-ttl: 2027-04-29            # optional: after this, `brain stale` flags it
+ttl: 2027-04-29            # optional: after this, `GET /v1/stale` flags it
 supersedes: [m_01j8aa11bc] # optional: this atom corrects older ones
 hash: sha256:9a0fdfd24833230c
 ---
@@ -235,7 +235,7 @@ Restore drill monthly: unpack a bundle into a scratch dir, run `brain verify`, e
 
 ## Status
 
-`v2.2.4`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.2.5`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -279,7 +279,7 @@ Issues and PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Securi
 ```bash
 # 1) 起服务(容器,数据在命名卷 brain-data,首次启动自己把库建好)
 docker run -d --name brain -p 127.0.0.1:8790:8790 -v brain-data:/data \
-  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.4
+  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.5
 
 # 想用宿主机目录:mkdir -p ./brain-data && sudo chown 10001:10001 ./brain-data,
 # 再把 -v 换成 "$PWD/brain-data:/data"(镜像以 10001 运行,root 拥有的目录它写不进去)
@@ -307,4 +307,4 @@ brain search "预发"             # 之后再找回来
 
 ### 状态
 
-`v2.2.4`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.2.5`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

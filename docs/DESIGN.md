@@ -65,10 +65,10 @@ Web UI 仅作为**管理入口**(v2.2 落地:浏览/检索/复核/令牌/审计/
 ```
 
 **关键简化**:因为路由做了 `proxy_network 192.0.2.0/24`,端本来就能直连 `服务器:8790`(实测链路
-8.8ms + 0.3ms)。所以**阶段一不需要代理**,端直接打 服务器。边缘代理降级为"可选件",只在下面三种情况才值得加:
+8.8ms + 0.3ms)。所以**阶段一不需要代理**,端直接打服务器。边缘代理降级为"可选件",只在下面三种情况才值得加:
 
-1. 要暴露到公网(EasyTier 之外),不希望把 服务器 直接暴露;
-2. 想要一个稳定名字/固定入口(`http://brain:8790`),不想在每端写 服务器 IP;
+1. 要暴露到公网(EasyTier 之外),不希望把服务器直接暴露;
+2. 想要一个稳定名字/固定入口(`http://brain:8790`),不想在每端写服务器 IP;
 3. 需要集中式限流、访问日志、TLS 终止。
 
 ### 2.1 职责与边界
@@ -76,17 +76,17 @@ Web UI 仅作为**管理入口**(v2.2 落地:浏览/检索/复核/令牌/审计/
 | 节点 | 角色 | 承担 | 不承担 |
 | --- | --- | --- | --- |
 | **端** | 消费者 | 缓存 last-known-good brief、离线 outbox | 不做合并、不写视图、不存权威数据 |
-| **边缘节点** | 边缘(可选) | 反代 / TLS / 限流 / 日志;可供 服务器 推送只读副本 | 不写 atoms、不重建视图、**不缓存记忆内容** |
+| **边缘节点** | 边缘(可选) | 反代 / TLS / 限流 / 日志;可供服务器推送只读副本 | 不写 atoms、不重建视图、**不缓存记忆内容** |
 | **服务器** | 核心 | 写序列化、视图重建、FTS、git/快照、密钥解密 | 不做公网入口(需要时交给边缘) |
 
 三条判断:
 
-1. **数据在家,服务就在家**:真相文件、git 历史、btrfs 快照都在 服务器。路由是 flash 存储、无快照、
+1. **数据在家,服务就在家**:真相文件、git 历史、btrfs 快照都在服务器。路由是 flash 存储、无快照、
    容器重建即丢状态,只适合无状态的反代,不适合承载真相。
 2. **路由的价值是"入口",不是"算力"**:它常开、IP 固定、位于 mesh 与 LAN 的交界;
    但它只有 2GB 内存(当前可用约 1.06GB)、aarch64、**没有 python3**(实测 `/usr/bin` 无 python),
-   所以 `brain serve` 只能跑在 服务器;若非要上路由,必须打包成 arm64 容器。
-3. **服务器 能主动连路由**,所以"服务器 推副本到边缘"合法;而"laptop 反向推给 服务器"仍然不成立,
+   所以 `brain serve` 只能跑在服务器;若非要上路由,必须打包成 arm64 容器。
+3. **服务器能主动连路由**,所以"服务器推副本到边缘"合法;而"laptop 反向推给服务器"仍然不成立,
    端侧必须始终由端发起。
 
 ### 2.2 为什么不让路由缓存 brief
@@ -98,8 +98,8 @@ Web UI 仅作为**管理入口**(v2.2 落地:浏览/检索/复核/令牌/审计/
 - 端侧允许缓存 last-known-good `brief`,但必须在响应里带 `stale: true` + 缓存时间,
   agent 看到后必须先声明"这是 X 小时前的快照,可能过期"。
 
-可选例外(§10.4):路由保存一份**只读副本**,仅在 服务器 长时间不可用时降级提供,
-必须由 服务器 主动 rsync 推送并带 `X-Brain-Stale` 头。
+可选例外(§10.4):路由保存一份**只读副本**,仅在服务器长时间不可用时降级提供,
+必须由服务器主动 rsync 推送并带 `X-Brain-Stale` 头。
 
 
 
@@ -194,7 +194,7 @@ time_suspect: false              # 客户端与服务端时钟差 > 5min 时置 
 | `id` | 幂等重放、精确取代、单条遗忘、跨端引用 |
 | `supersedes` | 记忆腐烂的主因不是"忘",而是"旧的和新的一起在,agent 随机信一条" |
 | `confidence` | 区分实测与猜测,避免把猜测复述成事实 |
-| `ttl` | `brain stale` 主动列出待复核项,防止半年后的毒药(代理地址、API 端点、固件版本最典型) |
+| `ttl` | `/v1/stale` 主动列出待复核项,防止半年后的毒药(代理地址、API 端点、固件版本最典型) |
 | `occurred_at` / `received_at` | 排序与 recency 用前者,冲突裁决用后者;离线重放不会把旧事实顶到最前 |
 | `hash` | **只**用于"同 author 短窗口内疑似重复"的提示,不用于跨 author 去重 |
 | `hash_algo` | 算法一旦升级,历史条目的语义不漂移 |
@@ -268,7 +268,7 @@ v1 的主题文件(形如 `facts/<标签>.md`)是视图被当真相用:多端追
 {"id":"m_7f3a91c4e","status":"deprecated","at":"2026-10-18T10:00:00+08:00",
  "reason":"代理已更换","author":"nas/dsh/assistant"}
 {"id":"m_5c1d2e3f4","status":"retracted","at":"2026-10-18T10:02:00+08:00",
- "reason":"当时结论是错的","author":"mac/dsh/engineer"}
+ "reason":"当时结论是错的","author":"laptop/dsh/engineer"}
 ```
 
 - `deprecated` = 过期/被替代,视图隐藏,检索默认排除;
@@ -312,7 +312,7 @@ v1 的主题文件(形如 `facts/<标签>.md`)是视图被当真相用:多端追
 name: 助手
 hosts: [nas]
 voice: 可爱、温柔,称呼「你」,偶尔撒娇;但做事直接准确,不拖泥带水
-duties: [生活助理, 服务器 运维, 家庭事务]
+duties: [生活助理, 服务器运维, 家庭事务]
 never: [把语气词写进事实库, 替用户拍板购买决定, 在报告里卖萌影响信息密度]
 ---
 ```
@@ -435,7 +435,7 @@ GET /v1/recall?since=7d&topic=机箱&limit=20
 
 - 视图同时展示:排序用 `occurred_at`,**冲突裁决用 `received_at`**(ADR-0013),旧的标 `⚠️ 已被 <id> 取代`
   或 `⚠️ 与 <id> 冲突`(若没声明);
-- `brain stale` 和 `brain conflicts` 列出这些点,由 agent 或人裁决;
+- `/v1/stale` 和 `/v1/conflicts` 列出这些点,由 agent 或人裁决;
 - 裁决结果是一条新 atom。
 
 自动合并冲突是 LLM 记忆系统最常见的翻车点:静默选一条,用户永远不知道另一条被丢了。
@@ -506,7 +506,7 @@ secrets/recipients.txt      # 各端 age 公钥(可公开)
 
 ### 9.2 使用:exec 而不是 get
 
-加密保护的是 `库文件`、`git 历史`、`服务器 磁盘`。它**保护不了 agent 的会话日志**:
+加密保护的是 `库文件`、`git 历史`、`服务器磁盘`。它**保护不了 agent 的会话日志**:
 明文只要出现在一次工具输出里,就被写进了 DSH/Octop/Pi 的 transcript。
 
 ```bash
@@ -551,7 +551,7 @@ qBittorrent Web UI 密码存于 `secrets/qb.age`,用法:
 
 | 项 | 选择 | 理由 |
 | --- | --- | --- |
-| 语言 | Python 3.12(stdlib) | 服务器 已有;零依赖 = 升级 harness 不会连坐 |
+| 语言 | Python 3.12(stdlib) | 服务器已有;零依赖 = 升级 harness 不会连坐 |
 | HTTP | `http.server.ThreadingHTTPServer` + 写锁 | 数百条规模足够;避免引入 FastAPI/uvicorn |
 | 存储 | SQLite(WAL)只做索引;真相仍是文件 | 索引可随时重建,文件才是备份对象 |
 | 端口 | 8790(避开 DSH 2298 / Octop 8089) | |
@@ -582,7 +582,7 @@ POST /v1/reindex                   # 手动触发视图/FTS 重建(可选)
 - `brain serve --init` 生成首个令牌,**只打印一次**;`state/tokens.json` 每条记:
   `{token_id, digest: sha256(salt||token), author{host,harness,role}, scopes:["read","write"],
   created, expires, revoked}`。**必须加盐**,否则口令空间小的 token 会被彩虹表反查。
-- `brain token issue --host mac --harness pi --role engineer --scope rw --ttl 365d`
+- `brain token issue --host laptop --harness pi --role engineer --scope rw --ttl 365d`
 - `brain token revoke <token_id>` / `brain token list`(只显示前缀,不显示明文)
 
 **端侧**
@@ -627,8 +627,8 @@ role  = "engineer"        # 缺省时按 §15 的推导规则
 | Docker | 24+ 与 Compose v2 | 直接加一个无状态容器 |
 | 现有入口 | 已有反代占用若干端口 | 别复用,加独立容器隔离 |
 | 空闲端口 | 8790 空闲(38368 已被 dropbear 占用) | 用 8790 |
-| Python | **没有 python3** | `brain serve` 只能在 服务器 |
-| EasyTier | `easytier-core`,实例 `fawkes`,tun `203.0.113.1/24`,proxy_network 192.0.2.0/24 | 端可直达 服务器,代理非必需 |
+| Python | **没有 python3** | `brain serve` 只能在服务器 |
+| EasyTier | `easytier-core`,实例 `fawkes`,tun `203.0.113.1/24`,proxy_network 192.0.2.0/24 | 端可直达服务器,代理非必需 |
 | 已知端点 | laptop 203.0.113.11(P2P 8.8ms)、公司 Win11 203.0.113.113(P2P 8.06ms) | mesh 不是"只有自己人" |
 
 **阶段一(默认):不做代理**。端直接 `http://192.0.2.10:8790`。少一个容器、少一条故障链。
@@ -672,7 +672,7 @@ services:
 1. **禁用口令登录,只留公钥**(高危→需谨慎执行,顺序见下)。
 2. **让 38368 只暴露在 LAN 地址上**(`Interface=lan`,按地址绑定):mesh 侧仍可经 proxy_network 命中该地址,
    真正的边界是「仅公钥」;要彻底断掉 mesh 访问需用 `DirectInterface` 或 zone 级 REJECT(未采用)。
-3. **给 服务器 一把专用 key**:已完成 —— `~/.ssh/brain-edge`,公钥已写入
+3. **给服务器一把专用 key**:已完成 —— `~/.ssh/brain-edge`,公钥已写入
    `/etc/dropbear/authorized_keys`(与既有的 `edge-access` 并存),已验证 `BatchMode` 免密登录成功。
 4. **口令轮换**:口令此前以明文存在于旧记忆文件里,禁用口令登录后残留风险自动消失。
 
@@ -696,7 +696,7 @@ ssh -i ~/.ssh/brain-edge -p 38368 -o BatchMode=yes root@198.51.100.1 'echo STILL
 | 关闭口令登录 | `uci set dropbear.@dropbear[0].PasswordAuth='off'` | 口令登录返回 `Permission denied (publickey)`,不再提示密码 |
 | 绑定 LAN | `uci set dropbear.@dropbear[0].Interface='lan'` | 38368 只监听 `198.51.100.1` 与 br-lan 的 IPv6,不再监听 `0.0.0.0` |
 | 封 ttyd 的 mesh 入口 | fw4 规则 `src=EasyTier dst_port=7681 REJECT` | 落在 `input_EasyTier` 链、位于 `jump accept_from_EasyTier` **之前** |
-| 保留回滚通道 | ttyd 7681 对 LAN 仍 200 | 服务器 侧 `curl 198.51.100.1:7681` → 200 |
+| 保留回滚通道 | ttyd 7681 对 LAN 仍 200 | 服务器侧 `curl 198.51.100.1:7681` → 200 |
 
 **关于"laptop 还能不能 SSH 进路由"**(2026-10-18 更正):
 
@@ -819,12 +819,12 @@ rsync -a --delete -e 'ssh -i ~/.ssh/brain-edge -p 38368' harness-brain/ root@198
 - **备份**:`git push` 到私有远端 + consolidate 前 `btrfs snapshot`。git 的价值是审计与回滚,
   不是同步。
 - **定时**:每日 `reindex` + `git commit`;每周 `stale` 报告(过期项清单)写到 `journal/` 并在 `brief` 里提示。
-- **降级**:serve 挂 → 端侧读缓存 brief、写 outbox;服务器 挂 → 各端继续写本地 outbox,
+- **降级**:serve 挂 → 端侧读缓存 brief、写 outbox;服务器挂 → 各端继续写本地 outbox,
   恢复后重放(幂等)。
 - **观测**:`/v1/health` 暴露 atom 数、视图 revision、outbox 积压数。
 - **时钟**:`occurred_at` 用客户端时间(离线保真),`received_at` 用服务端权威时间;
   两者差 > 5min 时置 `time_suspect: true` 并审计告警,**不静默改值**。
-- **边缘副本(暂缓,属过度设计)**:原计划 服务器 每 6h `rsync` 只读副本到路由。评审认为它与
+- **边缘副本(暂缓,属过度设计)**:原计划服务器每 6h `rsync` 只读副本到路由。评审认为它与
   "宁可不读、不可读过期"的原则、路由 flash 无快照、以及当前规模都不匹配,**移入未来可选**;
   当前只保留端侧 last-known-good brief。要做时按 `--exclude state --exclude index --exclude others` 复制。
 - **入口单点**:边缘节点挂 = 远端全断(组网进程在边缘上,mesh 随之消失),但局域网内直连服务器不受影响。
@@ -850,12 +850,12 @@ rsync -a --delete -e 'ssh -i ~/.ssh/brain-edge -p 38368' harness-brain/ root@198
 | 合并写坏 | 视图错乱 | 视图是派生,重建即可;atoms 不可变 |
 | 私钥丢失 | 该端无法解密 | 多收件人:用其他端重新加密给新公钥 |
 | 明文泄漏进 transcript | 会话日志含密码 | 只能靠 `exec` 纪律 + 事后轮换该密钥 |
-| 服务器 单点 | 全端失联 | 本地 outbox 保底,不阻塞工作 |
+| 服务器单点 | 全端失联 | 本地 outbox 保底,不阻塞工作 |
 | 边缘节点重启 | 远端短暂全断,LAN 内正常 | 端侧重试 + 路由容器 `restart: unless-stopped` |
-| 服务器 重启/升级 | 所有端写失败 | 端侧 outbox;可选边缘只读副本提供 stale 读 |
+| 服务器重启/升级 | 所有端写失败 | 端侧 outbox;可选边缘只读副本提供 stale 读 |
 | 路由 SSH 暴露到 mesh | 管理面被扫描 | 已关闭口令登录 + 按地址绑定;mesh 仍可达但只认公钥 |
 | 副本过期被当真相 | agent 复述旧事实 | 强制 `X-Brain-Stale` 头;客户端必须提示"快照过期" |
-| 端 token 泄漏 | 持有 write 者可逐条 forget,把整个库「隐藏」掉 | 不提供 batch;单条 forget 记审计;必要时 retract 需 服务器 本地确认 |
+| 端 token 泄漏 | 持有 write 者可逐条 forget,把整个库「隐藏」掉 | 不提供 batch;单条 forget 记审计;必要时 retract 需服务器本地确认 |
 | mesh 成员非可信 | 公司 Win11 等设备可达路由全部端口 | 38368 收回 LAN;口令登录改公钥;8790 也要 token |
 | 路由 root 口令泄漏 | 旧记忆文件里存过明文 | 关闭 PasswordAuth **只降低了 SSH 面**的风险;LuCI(80/443)+ 同一口令仍对 mesh 开放,风险**未消除**(见 ADR-0011) |
 | LuCI 被拿到口令 | mesh 成员可改启动项/加 authorized_keys,绕过 SSH 加固 | 已记录的接受风险;要消除需把 80/443 收到 br-lan 或换强口令 + 2FA |
