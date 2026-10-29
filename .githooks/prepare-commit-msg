@@ -1,0 +1,12 @@
+#!/bin/sh
+# 空提交信息时给个模板,减少 "update" 这类无信息提交
+msgfile="$1"
+if [ -n "$2" ]; then exit 0; fi   # -m/-F 已给,不干预
+if [ -s "$msgfile" ] && ! grep -qv '^#\|^$\|^ *$' "$msgfile"; then
+  cat > "$msgfile" <<'TPL'
+# <type>(<scope>): <一句话>
+#
+# type: feat|fix|refactor|docs|test|chore|perf|build|ci
+# 正文写"为什么",不写"改了哪些行"(diff 自己会说)
+TPL
+fi

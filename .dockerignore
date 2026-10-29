@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+tests
+docs
+examples
+tools
+__pycache__
+*.pyc
+*.md
+!README.md
+data

@@ -1,0 +1,21 @@
+# 单容器部署:数据卷持久化,端口只绑本机(要让局域网访问改成 "0.0.0.0:8790:8790")
+services:
+  brain:
+    image: ghcr.io/__OWNER__/harness-brain:2.2.1
+    # 想直接从源码构建:去掉上面一行,取消下一行注释
+    # build: .
+    container_name: brain
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - ./data:/data
+    environment:
+      BRAIN_ROOT: /data
+      BRAIN_TZ: UTC
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8790/v1/health', timeout=2).status == 200 else 1)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

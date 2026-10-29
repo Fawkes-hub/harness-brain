@@ -1,0 +1,841 @@
+#!/usr/bin/env python3
+"""brain —— 跨主机 / 跨 harness 的共享记忆库命令行。
+
+设计原则:
+  1. 只存纯 Markdown,不依赖任何 harness 的私有格式。
+  2. 读:任何能读文件 / 跑 shell 的 agent 都能用。
+  3. 写:只往 inbox/<host>__<harness>.md 追加,天然无并发冲突。
+  4. 合并:由 NAS 上的 `brain consolidate --apply` 汇总进 facts/ hosts/ rules/,并 git 提交。
+
+常用:
+  brain brief                 # 会话开头加载:规则 + 索引 + 未合并条目
+  brain search 关键词          # 全库检索
+  brain show facts/network.md # 看某个文件
+  brain remember "新事实" -k fact -t network
+  brain consolidate --apply    # 合并 inbox(仅 NAS 跑)
+  brain sync                   # git pull + commit + push
+  brain doctor                 # 环境自检
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import re
+import socket
+import subprocess
+import sys
+import urllib.parse
+from pathlib import Path
+
+ROOT = Path(os.environ.get("BRAIN_ROOT") or Path(__file__).resolve().parent.parent).resolve()
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+INBOX = ROOT / "inbox"
+ARCHIVE = INBOX / "archive"
+
+KINDS = ("fact", "rule", "pref", "lesson", "host", "project", "idea", "secret-ref")
+ENTRY_RE = re.compile(r"^### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) \| ([^|]+?) \| ([^|]+?) \| ?(.*)$")
+
+KIND_HELP = {
+    "fact": "稳定事实(环境、配置、账号归属等),进 facts/",
+    "rule": "规范/红线,进 rules.md",
+    "pref": "用户偏好,进 rules.md",
+    "lesson": "踩过的坑与解法,进 facts/",
+    "host": "某台机器/harness 专属的坑,进 hosts/<host>.md",
+    "project": "项目当前状态,进 projects/",
+    "idea": "待验证的想法,进 facts/inbox.md",
+}
+
+
+# ---------------------------------------------------------------- 基础工具
+def now() -> dt.datetime:
+    return dt.datetime.now().astimezone()
+
+
+def stamp(d: dt.datetime | None = None) -> str:
+    return (d or now()).strftime("%Y-%m-%d %H:%M")
+
+
+def slug(text: str, fallback: str = "misc") -> str:
+    text = (text or "").strip().lower()
+    text = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", text).strip("-")
+    return text or fallback
+
+
+def host_name(cli: str | None = None) -> str:
+    return cli or os.environ.get("BRAIN_HOST") or slug(socket.gethostname(), "unknown")
+
+
+def harness_name(cli: str | None = None) -> str:
+    if cli:
+        return cli
+    if os.environ.get("BRAIN_HARNESS"):
+        return os.environ["BRAIN_HARNESS"]
+    # 尽力自动识别父进程;用带边界的匹配,避免 "pi" 命中 "pip"/"spider" 之类
+    try:
+        cmd = Path(f"/proc/{os.getppid()}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+        for key in ("dsh", "octop", "claude", "codex", "cursor", "opencode", "pi"):
+            if re.search(rf"(^|[/\s-]){key}($|[\s/-])", cmd):
+                return key
+    except Exception:
+        pass
+    return "unknown"
+
+
+def rel(p: Path) -> str:
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
+
+
+def all_notes() -> list[Path]:
+    out: list[Path] = []
+    for sub in ("rules.md", "README.md"):
+        f = ROOT / sub
+        if f.exists():
+            out.append(f)
+    for sub in ("facts", "projects", "hosts"):
+        d = ROOT / sub
+        if d.is_dir():
+            out.extend(sorted(p for p in d.glob("*.md")))
+    return out
+
+
+def first_heading(p: Path) -> str:
+    try:
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+    except OSError:
+        pass
+    return p.stem
+
+
+def one_line(p: Path) -> str:
+    """文件里第一条非标题、非引用的正文,当作摘要。"""
+    try:
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.strip()
+            if s and not s.startswith(("#", ">", "---", "|", "```")):
+                s = re.sub(r"^[-*+]\s+", "", s).rstrip("。;；")
+                return s[:120]
+    except OSError:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------- 命令实现
+def cmd_remember(a: argparse.Namespace) -> int:
+    text = " ".join(a.text).strip()
+    if not text:
+        print("没有内容可记。", file=sys.stderr)
+        return 2
+    kind = a.kind
+    tags = ["#" + t.lstrip("#") for t in (a.tag or [])]
+    h, harness = host_name(a.host), harness_name(a.harness)
+    ts = stamp()
+    fname = f"{slug(h)}__{slug(harness)}.md"
+    path = INBOX / fname
+    new = not path.exists()
+    head = f"# inbox · {h} · {harness}\n\n> 追加写区域。条目由 `brain consolidate --apply` 合并归档,不要手改。\n\n"
+    with path.open("a", encoding="utf-8") as fh:
+        if new:
+            fh.write(head)
+        fh.write(f"### {ts} | {h} | {kind} | {' '.join(tags)}\n")
+        for line in text.splitlines():
+            fh.write(line + "\n")
+        fh.write("\n")
+    print(f"已记录 → {rel(path)}  [{kind}] {' '.join(tags)}")
+    if a.to:
+        print(f"  (合并时指定目标: {a.to})")
+        (INBOX / fname).with_suffix(".targets").open("a", encoding="utf-8").write(f"{ts} {a.to}\n")
+    return 0
+
+
+def parse_entries(path: Path) -> list[dict]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    entries: list[dict] = []
+    cur: dict | None = None
+    for line in lines:
+        m = ENTRY_RE.match(line)
+        if m:
+            if cur:
+                entries.append(cur)
+            cur = {"ts": m.group(1), "host": m.group(2).strip(), "kind": m.group(3).strip(),
+                   "tags": m.group(4).strip(), "body": []}
+        elif cur is not None:
+            cur["body"].append(line)
+    if cur:
+        entries.append(cur)
+    for e in entries:
+        e["body"] = "\n".join(e["body"]).strip()
+    return entries
+
+
+def pending_entries() -> list[tuple[Path, dict]]:
+    out: list[tuple[Path, dict]] = []
+    for p in sorted(INBOX.glob("*.md")):
+        for e in parse_entries(p):
+            out.append((p, e))
+    return out
+
+
+def load_targets() -> dict[str, str]:
+    """inbox/*.targets 里记录的显式目标:`<时间戳> <相对路径>`。"""
+    out: dict[str, str] = {}
+    for f in INBOX.glob("*.targets"):
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3:
+                out[f"{parts[0]} {parts[1]}"] = parts[2]
+    return out
+
+
+def target_for(e: dict, overrides: dict[str, str] | None = None) -> Path:
+    if overrides and e["ts"] in overrides:
+        return (ROOT / overrides[e["ts"]]).resolve()
+    kind, tags = e["kind"], [t.lstrip("#") for t in e["tags"].split()]
+    if kind in ("rule", "pref"):
+        return ROOT / "rules.md"
+    if kind == "host":
+        return ROOT / "hosts" / f"{slug(e['host'])}.md"
+    if kind == "project":
+        return ROOT / "projects" / f"{slug(tags[0] if tags else 'misc')}.md"
+    if kind == "idea":
+        return ROOT / "facts" / "inbox.md"
+    return ROOT / "facts" / f"{slug(tags[0] if tags else 'misc')}.md"
+
+
+def block_for(e: dict) -> str:
+    head = f"## {e['ts'][:10]} · {e['host']} · {e['kind']}"
+    if e["tags"]:
+        head += f" · {e['tags']}"
+    return head + "\n\n" + e["body"] + "\n\n"
+
+
+def cmd_consolidate(a: argparse.Namespace) -> int:
+    entries = pending_entries()
+    if not entries:
+        print("inbox 是空的,无需合并。")
+        return 0
+    overrides = load_targets()
+    plan: dict[Path, list[dict]] = {}
+    for _, e in entries:
+        plan.setdefault(target_for(e, overrides), []).append(e)
+
+    print(f"待合并 {len(entries)} 条 → {len(plan)} 个文件")
+    for tgt, es in plan.items():
+        print(f"  {rel(tgt)}  ←  {len(es)} 条 : " + ", ".join(e["kind"] for e in es))
+    if not a.apply:
+        print("\n(dry-run,加 --apply 才真正写入)")
+        return 0
+
+    for tgt, es in plan.items():
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not tgt.exists()
+        with tgt.open("a", encoding="utf-8") as fh:
+            if new_file:
+                fh.write(f"# {tgt.stem}\n\n")
+            for e in es:
+                fh.write(block_for(e))
+
+    # 归档:原文进 archive,源文件只留表头
+    ARCHIVE.mkdir(parents=True, exist_ok=True)
+    for src in {p for p, _ in entries}:
+        arch = ARCHIVE / f"{src.stem}-{now():%Y%m}.md"
+        with arch.open("a", encoding="utf-8") as out:
+            out.write(src.read_text(encoding="utf-8"))
+            out.write("\n")
+        lines = src.read_text(encoding="utf-8").splitlines(True)
+        header = []
+        for line in lines:
+            if ENTRY_RE.match(line):
+                break
+            header.append(line)
+        src.write_text("".join(header).rstrip() + "\n", encoding="utf-8")
+
+    cmd_reindex(argparse.Namespace(quiet=True))
+    print("合并完成,已重建 INDEX.md。记得 `brain sync` 提交。")
+    return 0
+
+
+def cmd_brief(a: argparse.Namespace) -> int:
+    """按重要性拼装摘要;超预算时从最不重要的段落整段丢弃,而不是拦腰截断。"""
+    budget = a.max_chars
+    sections: list[tuple[str, str]] = []
+
+    rules = ROOT / "rules.md"
+    if rules.exists():
+        sections.append(("规范", rules.read_text(encoding="utf-8").strip()))
+
+    # 顺序即重要性:超预算时从尾部整段丢弃(见 DESIGN-v2 §7.1)
+    idx = ROOT / "facts" / "INDEX.md"
+    if idx.exists():
+        rows = idx.read_text(encoding="utf-8").strip().splitlines()
+        rows = [r for r in rows if not r.startswith("# ")]  # 去掉文件内标题
+        rows = rows[: max(3, a.index_rows + 2)]
+        sections.append(("事实索引", "\n".join(rows)))
+
+    hs = sorted((ROOT / "hosts").glob("*.md"))
+    if hs:
+        sections.append(("主机笔记", "\n".join(f"- {p.stem}: {one_line(p)}" for p in hs)))
+
+    pend = pending_entries()
+    if pend:
+        tail = [f"- [{e['kind']}] {e['host']} {e['ts']}: {e['body'][:160]}"
+                for _, e in pend[-a.recent:]]
+        sections.append(("尚未合并的新记忆", "\n".join(tail)))
+
+    total = len(sections)
+    dropped = 0
+    while sections:
+        out = "\n\n".join(f"# 【共享记忆库 · {title}】\n{body}" for title, body in sections)
+        if len(out) <= budget:
+            break
+        sections.pop()  # 丢掉最不重要的那一段
+        dropped += 1
+    else:
+        out = ""
+    if not out:
+        if dropped:
+            print(f"预算 {budget} 字符连 persona/rules 都放不下;请调大 --max-chars,"
+                  f"或直接用 `brain show rules.md`。")
+            return 3
+        print("(记忆库还是空的)")
+        return 0
+    print(out)
+    if dropped:
+        print(f"\n…(省略了 {dropped} 个次要段落,完整内容看 {ROOT})")
+    return 0
+
+
+def cmd_search(a: argparse.Namespace) -> int:
+    q = " ".join(a.query)
+    files = all_notes() + sorted(INBOX.glob("*.md"))
+    rx = re.compile(q, re.I)
+    hits = 0
+    for p in files:
+        try:
+            for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                if rx.search(line):
+                    print(f"{rel(p)}:{i}: {line.strip()[:200]}")
+                    hits += 1
+                    if a.limit and hits >= a.limit:
+                        print(f"…(到 {a.limit} 条上限,用 -n 调大)")
+                        return 0
+        except OSError:
+            continue
+    if not hits:
+        print(f"没找到 `{q}`。库里还没有这条记忆 —— 值得记的话用 `brain remember`。")
+        return 1
+    return 0
+
+
+def cmd_show(a: argparse.Namespace) -> int:
+    p = (ROOT / a.path).resolve()
+    if not str(p).startswith(str(ROOT)) or not p.is_file():
+        print(f"没有这个文件: {a.path}(只允许库内文件)", file=sys.stderr)
+        return 2
+    print(p.read_text(encoding="utf-8", errors="replace"))
+    return 0
+
+
+def cmd_reindex(a: argparse.Namespace) -> int:
+    rows = ["# 事实索引\n", "| 文件 | 主题 | 摘要 |", "| --- | --- | --- |"]
+    for p in sorted((ROOT / "facts").glob("*.md")):
+        if p.name == "INDEX.md":
+            continue
+        rows.append(f"| {p.name} | {first_heading(p)} | {one_line(p).replace('|', '/')} |")
+    (ROOT / "facts" / "INDEX.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    if not a.quiet:
+        print(f"已重建 facts/INDEX.md ({len(rows) - 3} 个主题)")
+    return 0
+
+
+def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *args], text=True,
+                          capture_output=True, check=check)
+
+
+def cmd_sync(a: argparse.Namespace) -> int:
+    if not (ROOT / ".git").exists():
+        print("这不是 git 仓库,跳过同步(先 `git init` 或者接入 NAS 上的仓库)。")
+        return 0
+    if a.pull:
+        r = git("pull", "--rebase", "--autostash", check=False)
+        print(r.stdout.strip() or r.stderr.strip())
+    cmd_reindex(argparse.Namespace(quiet=True))
+    git("add", "-A", check=False)
+    r = git("commit", "-m", a.message or f"brain: {host_name()}/{harness_name()} @ {stamp()}",
+            check=False)
+    if r.returncode == 0:
+        print("已提交。")
+    elif "nothing to commit" in (r.stdout + r.stderr):
+        print("没有改动。")
+    else:
+        print(r.stdout.strip() or r.stderr.strip())
+    if a.push:
+        r = git("push", check=False)
+        print(r.stdout.strip() or r.stderr.strip())
+    return 0
+
+
+def cmd_doctor(a: argparse.Namespace) -> int:
+    ok = True
+    print(f"库根目录: {ROOT}")
+    print(f"身份: host={host_name()} harness={harness_name()}")
+    if not (ROOT / "rules.md").exists():
+        print("  ✗ 缺 rules.md")
+        ok = False
+    print(f"  可写: {'是' if os.access(ROOT, os.W_OK) else '否 ✗'}")
+    n_facts = len(list((ROOT / 'facts').glob('*.md')))
+    print(f"  事实文件: {n_facts} 个")
+    print(f"  待合并 inbox: {len(pending_entries())} 条")
+    print(f"  git: {'有' if (ROOT / '.git').exists() else '无(建议 git init 留版本历史)'}")
+    print("  接入情况:")
+    for label, path in adapter_targets().items():
+        mark = "✓" if path.exists() else "·"
+        print(f"    {mark} {label}: {path}")
+    return 0 if ok else 1
+
+
+def adapter_targets() -> dict[str, Path]:
+    """只列出**本机真实存在**的 harness 目录,避免在多主机环境里误报。"""
+    home = Path.home()
+    out: dict[str, Path] = {}
+    dsh = Path(os.environ.get("DSH_HOME", home / ".dsh"))
+    if dsh.is_dir():
+        out[f"DSH({dsh})"] = dsh / "AGENTS.md"
+    pi = Path(os.environ.get("PI_CODING_AGENT_DIR", home / ".pi" / "agent"))
+    if pi.is_dir():
+        out[f"Pi({pi})"] = pi / "AGENTS.md"
+    return out
+
+
+def cmd_hosts(a: argparse.Namespace) -> int:
+    for p in sorted((ROOT / "hosts").glob("*.md")):
+        print(f"{p.stem:20s} {one_line(p)}")
+    files = sorted(INBOX.glob("*.md"))
+    if files:
+        print("\ninbox 写入方:")
+        for p in files:
+            print(f"  {p.name:32s} {len(parse_entries(p))} 条待合并")
+    return 0
+
+
+# ---------------------------------------------------------------- v2 数据层
+def is_v2() -> bool:
+    return (ROOT / "atoms").exists()
+
+
+def _store():
+    from brainlib.store import Store
+    return Store(ROOT)
+
+
+def _atom_from_args(a) -> "object":
+    from brainlib.model import Atom, content_hash, new_id, now_iso
+
+    body = " ".join(a.text).strip()
+    if not body:
+        raise SystemExit("没有内容可记。")
+    ident = getattr(a, "id", None) or new_id()
+    at = Atom(
+        id=ident, kind=a.kind, body=body,
+        occurred_at=now_iso(), received_at=now_iso(),
+        author={"host": host_name(a.host), "harness": harness_name(a.harness),
+                "role": os.environ.get("BRAIN_ROLE", "assistant")},
+        tags=[t.lstrip("#") for t in (a.tag or [])],
+        confidence=getattr(a, "confidence", "high"),
+        source=getattr(a, "source", "cli"),
+        supersedes=getattr(a, "supersedes", None),
+        ttl=getattr(a, "ttl", None),
+    )
+    at.hash = content_hash(at.kind, at.tags, at.ttl, at.supersedes, at.body)
+    return at
+
+
+def v2_remember(a) -> int:
+    cfg = _client_cfg()
+    if cfg:
+        from brainlib.client import append_outbox, replay, request
+        from brainlib.model import new_id, now_iso
+
+        replay(cfg)
+        body = " ".join(a.text).strip()
+        if not body:
+            print("没有内容可记。", file=sys.stderr)
+            return 2
+        rec = {"id": getattr(a, "id", None) or new_id(), "kind": a.kind, "body": body,
+               "tags": [t.lstrip("#") for t in (a.tag or [])],
+               "confidence": getattr(a, "confidence", "high"),
+               "source": getattr(a, "source", "cli"),
+               "supersedes": getattr(a, "supersedes", None),
+               "ttl": getattr(a, "ttl", None),
+               "occurred_at": now_iso()}
+        try:
+            code, data = request(cfg, "POST", "/v1/remember", rec)
+        except (OSError, TimeoutError):
+            append_outbox(rec)
+            print(f"服务不可达,已离线暂存: {rec['id']}(下次命令自动重放)")
+            return 0
+        if code in (200, 201):
+            print(f"{'已记录' if code == 201 else '幂等重放'} {data.get('id')} → {cfg['url']}")
+            return 0
+        print(f"{code} {data}", file=sys.stderr)
+        return 4
+
+    st = _store()
+    atom = _atom_from_args(a)
+    try:
+        state = st.put_atom(atom)
+    except FileExistsError as e:
+        print(f"409 conflict_id: {e}", file=sys.stderr)
+        return 4
+    rev = st.rebuild()
+    print(f"{'已记录' if state == 'created' else '幂等重放'} {atom.id} → atoms/{atom.occurred_at[:7].replace('-', '')}/  (views {rev[:14]}…)")
+    return 0
+
+
+def v2_forget(a) -> int:
+    cfg = _client_cfg()
+    if cfg:
+        from brainlib.client import replay, request
+        replay(cfg)
+        code, data = request(cfg, "POST", "/v1/forget",
+                             {"id": a.id, "status": a.status, "reason": a.reason,
+                              "replaced_by": getattr(a, "replaced_by", None)})
+        print(f"{code} {data}")
+        return 0 if code in (200, 201) else 2
+
+    st = _store()
+    atoms = st.load_atoms()
+    if a.id not in atoms:
+        print(f"404 not_found: {a.id}", file=sys.stderr)
+        return 2
+    if a.status == "retracted":
+        if not a.replaced_by:
+            print("400 retracted 必须带 --replaced-by", file=sys.stderr)
+            return 2
+        if a.replaced_by not in atoms:
+            print(f"400 replaced_by 目标不存在: {a.replaced_by}", file=sys.stderr)
+            return 2
+    rec = st.append_tombstone(a.id, a.status, a.reason or "", f"{host_name()}/{harness_name()}",
+                              a.replaced_by)
+    st.rebuild()
+    print(f"已追加 tombstone seq={rec['seq']} {a.id} → {a.status}")
+    return 0
+
+
+def v2_restore(a) -> int:
+    a.status = "active"
+    return v2_forget(a)
+
+
+def v2_verify(a) -> int:
+    problems = _store().verify()
+    if problems:
+        for msg in problems:
+            print("  ✗", msg)
+        print(f"✗ {len(problems)} 项不通过")
+        return 1
+    print("✓ verify 五项全过")
+    return 0
+
+
+def v2_brief(a) -> int:
+    cfg = _client_cfg()
+    if cfg:
+        from brainlib.client import replay, request
+        replay(cfg)
+        code, data = request(cfg, "GET", f"/v1/brief?budget={a.max_chars}&index_rows={a.index_rows}")
+        if code == 200:
+            print(data if isinstance(data, str) else json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
+        print(f"{code} {data}", file=sys.stderr)
+        return 3 if code == 413 else 1
+
+    st = _store()
+    st.rebuild()
+    budget = a.max_chars
+    sections: list[tuple[str, str]] = []
+    rules = ROOT / "views" / "rules.md"
+    if rules.exists():
+        sections.append(("规范", rules.read_text(encoding="utf-8").strip()))
+    idx = ROOT / "views" / "INDEX.md"
+    if idx.exists():
+        rows = [r for r in idx.read_text(encoding="utf-8").strip().splitlines() if not r.startswith("# ")]
+        sections.append(("事实索引", "\n".join(rows[: a.index_rows + 2])))
+    host_topic = ROOT / "views" / "topics" / "host.md"
+    if host_topic.exists():
+        lines = host_topic.read_text(encoding="utf-8").splitlines()
+        sections.append(("主机笔记", "\n".join(lines[: 2 + a.recent * 6])))
+    dropped = 0
+    while sections:
+        out = "\n\n".join(f"# 【共享记忆库 · {t}】\n{b}" for t, b in sections)
+        if len(out) <= budget:
+            break
+        sections.pop()
+        dropped += 1
+    else:
+        out = ""
+    if not out:
+        print(f"预算 {budget} 字符连 rules 都放不下;请调大 --max-chars。")
+        return 3
+    print(out)
+    if dropped:
+        print(f"\n…(省略了 {dropped} 个次要段落)")
+    return 0
+
+
+def v2_search(a) -> int:
+    cfg = _client_cfg()
+    if cfg:
+        from brainlib.client import replay, request
+        replay(cfg)
+        q = " ".join(a.query)
+        code, data = request(cfg, "GET", f"/v1/search?q={urllib.parse.quote(q)}&limit={a.limit}")
+        if code != 200:
+            print(f"{code} {data}", file=sys.stderr)
+            return 1
+        hits = data.get("hits", [])
+        for h in hits:
+            print(f"{h['id']}  {h['occurred_at'][:10]}  {h['author']}  {h['snippet']}")
+        if not hits:
+            print(f"没找到 `{q}`。")
+            return 1
+        return 0
+
+    """默认只搜「可见」的 atom:已遗忘/已撤回的不出现(它们仍在库与 git 里,可追溯)。"""
+    q = " ".join(a.query)
+    rx = re.compile(q, re.I)
+    st = _store()
+    visible_ids = {x.id for x in st.visible()[0]}
+    files = sorted((ROOT / "atoms").rglob("*.md")) + sorted((ROOT / "views").rglob("*.md"))
+    hits = 0
+    for p in files:
+        if p.parent.name == "atoms" or "atoms" in p.parts:
+            if p.stem not in visible_ids:
+                continue
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if rx.search(line):
+                print(f"{rel(p)}:{i}: {line.strip()[:200]}")
+                hits += 1
+                if a.limit and hits >= a.limit:
+                    return 0
+    if not hits:
+        print(f"没找到 `{q}`。")
+        return 1
+    return 0
+
+
+def v2_reindex(a) -> int:
+    rev = _store().rebuild(force=True)
+    print(f"已重建视图,revision={rev}")
+    return 0
+
+
+def v2_whoami(a) -> int:
+    from brainlib.model import parse_iso
+
+    print(f"host={host_name()} harness={harness_name()} "
+          f"role={os.environ.get('BRAIN_ROLE', 'assistant')} role_source=env/derived")
+    st = _store()
+    print(f"atoms={len(st.load_atoms())} revision={st.current_revision()[:20]}…")
+    return 0
+
+
+def v2_doctor(a) -> int:
+    st = _store()
+    atoms = st.load_atoms()
+    print(f"模式: v2(atoms/)  库根: {ROOT}")
+    print(f"身份: {host_name()}/{harness_name()}/{os.environ.get('BRAIN_ROLE', 'assistant')}")
+    print(f"atom: {len(atoms)} 条   revision: {st.current_revision()[:22]}…")
+    print(f"tombstone: {len(st.load_tombstones())} 条   视图: {'有' if st.current_revision() else '未生成'}")
+    problems = st.verify()
+    print(f"verify: {'✓ 五项全过' if not problems else '✗ ' + str(len(problems)) + ' 项'}")
+    for msg in problems[:5]:
+        print("   -", msg)
+    return 0 if not problems else 1
+
+
+def v2_sync(a) -> int:
+    st = _store()
+    st.rebuild(force=True)
+    if not (ROOT / ".git").exists():
+        print("不是 git 仓库,跳过同步。")
+        return 0
+    git("add", "-A", check=False)
+    r = git("commit", "-m", a.message or f"brain: {host_name()}/{harness_name()} @ {stamp()}", check=False)
+    print("已提交。" if r.returncode == 0 else (r.stdout.strip() or r.stderr.strip()))
+    if a.push:
+        r = git("push", check=False)
+        print(r.stdout.strip() or r.stderr.strip())
+    return 0
+
+
+def v2_serve(a) -> int:
+    from brainlib.server import serve
+    serve(ROOT, a.bind, a.port)
+    return 0
+
+
+def v2_token(a) -> int:
+    from brainlib.auth import TokenStore
+    ts = TokenStore(ROOT / "state" / "tokens.json")
+    ts.init()
+    if a.action == "issue":
+        scopes = (a.scope or "read,write").split(",")
+        tok, rec = ts.issue(a.host or "unknown", a.harness or "unknown",
+                            a.role or "assistant", scopes, a.ttl)
+        print(f"token: {tok}")
+        print(f"  id={rec['id']}  scopes={','.join(rec['scopes'])}  expires={rec['expires']}")
+        print("  只显示这一次;写到端侧 ~/.config/brain/config.toml(0600)")
+        return 0
+    if a.action == "revoke":
+        print("已吊销" if ts.revoke(a.token_id) else "没找到该令牌")
+        return 0
+    if a.action == "list":
+        for t in ts.list():
+            print(f"{t['id']}  {t['prefix']}…  {t['author']['host']}/{t['author']['harness']}/"
+                  f"{t['author']['role']}  {','.join(t['scopes'])}  "
+                  f"{'REVOKED' if t['revoked'] else 'ok'}  exp={t['expires']}")
+        return 0
+    return 2
+
+
+def _client_cfg():
+    from brainlib.client import load_config
+    cfg = load_config()
+    return cfg if cfg.get("url") else None
+
+
+def v2_main(a) -> int:
+    table = {
+        "brief": v2_brief, "search": v2_search, "remember": v2_remember,
+        "forget": v2_forget, "restore": v2_restore, "verify": v2_verify,
+        "reindex": v2_reindex, "whoami": v2_whoami, "show": cmd_show,
+        "doctor": v2_doctor, "hosts": cmd_hosts, "sync": v2_sync,
+        "serve": v2_serve, "token": v2_token,
+    }
+    return table[a.cmd](a)
+
+
+# ---------------------------------------------------------------- 入口
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="brain", description="跨主机 / 跨 harness 共享记忆库")
+    try:
+        from brainlib import __version__ as _ver
+    except Exception:  # 库未安装/路径异常时不影响 CLI
+        _ver = "unknown"
+    p.add_argument("--version", action="version", version=f"brain {_ver}")
+    p.add_argument("--root", help="库根目录(默认按脚本位置推断,或 $BRAIN_ROOT)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("brief", help="输出会话开头该读的摘要")
+    b.add_argument("--max-chars", type=int, default=6000)
+    b.add_argument("--recent", type=int, default=5)
+    b.add_argument("--index-rows", type=int, default=12, help="事实索引最多列几行")
+    b.set_defaults(func=cmd_brief)
+
+    s = sub.add_parser("search", help="全库检索(正则)")
+    s.add_argument("query", nargs="+")
+    s.add_argument("-n", "--limit", type=int, default=40)
+    s.set_defaults(func=cmd_search)
+
+    sh = sub.add_parser("show", help="查看库内文件")
+    sh.add_argument("path")
+    sh.set_defaults(func=cmd_show)
+
+    r = sub.add_parser("remember", help="记一条新记忆(追加到 inbox)")
+    r.add_argument("text", nargs="+")
+    r.add_argument("-k", "--kind", default="fact", choices=KINDS, help="; ".join(f"{k}={v}" for k, v in KIND_HELP.items()))
+    r.add_argument("-t", "--tag", action="append", help="可重复,合并时决定落到哪个文件")
+    r.add_argument("--host", help="覆盖主机名")
+    r.add_argument("--harness", help="覆盖 harness 名")
+    r.add_argument("--to", help="合并目标文件(相对库根)")
+    r.add_argument("--id", dest="id", help="指定 id(v2;离线续写时用)")
+    r.add_argument("--confidence", default="high", choices=["high", "medium", "guess"])
+    r.add_argument("--source", default="cli")
+    r.add_argument("--supersedes", help="被取代的 atom id")
+    r.add_argument("--ttl", help="到期日 YYYY-MM-DD")
+    r.set_defaults(func=cmd_remember)
+
+    c = sub.add_parser("consolidate", help="把 inbox 合并进 facts/hosts/rules")
+    c.add_argument("--apply", action="store_true", help="真正写入(默认 dry-run)")
+    c.set_defaults(func=cmd_consolidate)
+
+    ri = sub.add_parser("reindex", help="重建索引/视图")
+    ri.add_argument("--quiet", action="store_true")
+    ri.add_argument("--force", action="store_true", help="v2:强制重建视图")
+    ri.set_defaults(func=cmd_reindex)
+
+    sy = sub.add_parser("sync", help="git 提交/推送")
+    sy.add_argument("-m", "--message")
+    sy.add_argument("--pull", action="store_true")
+    sy.add_argument("--push", action="store_true")
+    sy.set_defaults(func=cmd_sync)
+
+    d = sub.add_parser("doctor", help="环境自检")
+    d.set_defaults(func=cmd_doctor)
+
+    sv = sub.add_parser("serve", help="v2:启动 HTTP 服务")
+    sv.add_argument("--bind", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8790)
+
+    tk = sub.add_parser("token", help="v2:令牌签发/吊销/列表")
+    tk.add_argument("action", choices=["issue", "revoke", "list"])
+    tk.add_argument("token_id", nargs="?", default="")
+    tk.add_argument("--host")
+    tk.add_argument("--harness")
+    tk.add_argument("--role")
+    tk.add_argument("--scope", default="read,write")
+    tk.add_argument("--ttl", type=int, default=365)
+
+    for name, hlp in (("forget", "v2:遗忘一条记忆(追加 tombstone)"),
+                      ("restore", "v2:恢复一条被遗忘的记忆"),
+                      ("verify", "v2:自检 atom/tombstone/视图"),
+                      ("whoami", "v2:我是谁")):
+        sp = sub.add_parser(name, help=hlp)
+        if name == "forget":
+            sp.add_argument("id")
+            sp.add_argument("--status", default="deprecated",
+                            choices=["deprecated", "retracted", "active"])
+            sp.add_argument("--reason", default="")
+            sp.add_argument("--replaced-by", dest="replaced_by")
+        if name == "restore":
+            sp.add_argument("id")
+            sp.add_argument("--status", default="active", help=argparse.SUPPRESS)
+            sp.add_argument("--reason", default="恢复")
+            sp.add_argument("--replaced-by", dest="replaced_by", default=None)
+        setattr(sp, "_is_v2", True)
+
+    h = sub.add_parser("hosts", help="列出主机笔记与 inbox 写入方")
+    h.set_defaults(func=cmd_hosts)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if getattr(args, "root", None):
+        global ROOT, INBOX, ARCHIVE
+        ROOT = Path(args.root).expanduser().resolve()
+        INBOX, ARCHIVE = ROOT / "inbox", ROOT / "inbox" / "archive"
+    if not ROOT.is_dir():
+        print(f"库根目录不存在: {ROOT}", file=sys.stderr)
+        return 2
+    if is_v2() and hasattr(args, "cmd") and args.cmd in {
+            "brief", "search", "remember", "forget", "restore", "verify",
+            "reindex", "whoami", "show", "doctor", "hosts", "sync",
+            "serve", "token"}:
+        return v2_main(args)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

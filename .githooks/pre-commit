@@ -1,0 +1,8 @@
+#!/bin/sh
+# 提交门禁:单测 + 隐私扫描。跳过用 git commit --no-verify
+set -e
+cd "$(git rev-parse --show-toplevel)" || exit 1
+echo "[pre-commit] 单元测试…"
+python3 -m unittest discover -s tests -q || { echo "✗ 单测未通过" >&2; exit 1; }
+echo "[pre-commit] 隐私扫描…"
+python3 tools/privacy-scan.py --strict >/dev/null || { echo "✗ 出现疑似个人/内网信息,跑 python3 tools/privacy-scan.py --strict 看明细" >&2; exit 1; }

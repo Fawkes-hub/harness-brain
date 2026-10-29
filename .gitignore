@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 数据层与派生层:永远不进代码仓
+/data/
+/atoms/
+/views/
+/state/
+/inbox/
+/bundle/
+/snapshots/
+*.zipapp
+
+# 本地配置与凭据:绝不提交(令牌只放 0600 文件或环境变量)
+.env
+*.local
+*.key
+*.pem
+*.age
+config.toml
+tokens.json
+
+# 词表类私有清单(专名扫描用,仓库外维护)
+lexicon*.txt
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
