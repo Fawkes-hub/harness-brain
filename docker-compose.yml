@@ -1,7 +1,7 @@
 # 单容器部署:数据卷持久化,端口只绑本机(要让局域网访问改成 "0.0.0.0:8790:8790")
 services:
   brain:
-    image: ghcr.io/Fawkes-hub/harness-brain:2.2.3
+    image: ghcr.io/Fawkes-hub/harness-brain:2.2.4
     # 想直接从源码构建:去掉上面一行,取消下一行注释
     # build: .
     container_name: brain
@@ -9,7 +9,11 @@ services:
     ports:
       - "127.0.0.1:8790:8790"
     volumes:
-      - ./data:/data
+      # 命名卷:开箱即用(容器以 10001 运行,命名卷会自动带上正确的属主)
+      - brain-data:/data
+      # 想用宿主机目录:换成下行,并先执行
+      #   mkdir -p ./brain-data && sudo chown 10001:10001 ./brain-data
+      # - ./brain-data:/data
     environment:
       BRAIN_ROOT: /data
       BRAIN_TZ: UTC
@@ -19,3 +23,6 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
+
+volumes:
+  brain-data:

@@ -59,18 +59,47 @@ Design commitments, in priority order:
 ```bash
 docker run -d --name brain \
   -p 127.0.0.1:8790:8790 \
-  -v "$PWD/brain-data:/data" \
+  -v brain-data:/data \
   --restart unless-stopped \
   --memory 256m \
-  ghcr.io/Fawkes-hub/harness-brain:2.2.3
+  ghcr.io/Fawkes-hub/harness-brain:2.2.4
+```
+
+Data lives in the named volume `brain-data`, so there is nothing to prepare. The service
+creates the whole library layout on first start — `curl 127.0.0.1:8790/v1/health` answers
+`{"ok": true, ...}` with `"atoms": 0`.
+
+Want a plain host directory instead? **Hand it to the container's uid first.** The image runs
+as `10001:10001` and cannot write into a directory owned by root:
+
+```bash
+mkdir -p ./brain-data && sudo chown 10001:10001 ./brain-data
+# then use -v "$PWD/brain-data:/data" in the command above
 ```
 
 ### docker compose
 
 ```bash
 git clone https://github.com/Fawkes-hub/harness-brain.git && cd harness-brain
-docker compose up -d          # data lands in ./data
+docker compose up -d          # data lands in the named volume brain-data
 ```
+
+### Talking to the container
+
+Everything the CLI can do, the running container can do against its own volume:
+
+```bash
+docker exec brain brain token issue --host laptop --harness cli --role engineer
+docker exec brain brain verify
+```
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `PermissionError: [Errno 13] Permission denied: '/data/atoms'` | Bind mount owned by root. `sudo chown -R 10001:10001 <host-dir>` (or drop the bind mount and use the named volume). |
+| `bind: address already in use` | 8790 is taken. Publish another host port: `-p 127.0.0.1:8791:8790`. |
+| Container `unhealthy` | `docker logs brain` — the service logs its root, atom count and every request. |
 
 ### Bare metal (systemd, no Docker)
 
@@ -206,7 +235,7 @@ Restore drill monthly: unpack a bundle into a scratch dir, run `brain verify`, e
 
 ## Status
 
-`v2.2.3`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.2.4`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -248,12 +277,15 @@ Issues and PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Securi
 ### 三步上手
 
 ```bash
-# 1) 起服务(容器,数据在 ./data)
-docker run -d --name brain -p 127.0.0.1:8790:8790 -v "$PWD/brain-data:/data" \
-  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.3
+# 1) 起服务(容器,数据在命名卷 brain-data,首次启动自己把库建好)
+docker run -d --name brain -p 127.0.0.1:8790:8790 -v brain-data:/data \
+  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.4
+
+# 想用宿主机目录:mkdir -p ./brain-data && sudo chown 10001:10001 ./brain-data,
+# 再把 -v 换成 "$PWD/brain-data:/data"(镜像以 10001 运行,root 拥有的目录它写不进去)
 
 # 2) 给每台机器签一把自己的令牌(明文只显示一次)
-BRAIN_ROOT=./brain-data ./bin/brain token issue --host laptop --harness cli --role engineer
+docker exec brain brain token issue --host laptop --harness cli --role engineer
 
 # 3) 客户端写下地址与令牌(0600,绝不进仓库),然后就能用了
 brain remember "预发库是只读的,写入只走迁移任务" -k fact -t deploy
@@ -275,4 +307,4 @@ brain search "预发"             # 之后再找回来
 
 ### 状态
 
-`v2.2.3`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.2.4`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

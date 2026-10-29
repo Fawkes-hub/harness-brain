@@ -15,7 +15,8 @@ RUN groupadd -g 10001 brain \
 WORKDIR /app
 COPY --chown=10001:10001 brainlib/ ./brainlib/
 COPY --chown=10001:10001 bin/brain ./bin/brain
-RUN chmod 0755 /app/bin/brain
+RUN chmod 0755 /app/bin/brain \
+ && ln -sf /app/bin/brain /usr/local/bin/brain
 
 USER 10001:10001
 VOLUME ["/data"]

@@ -12,6 +12,27 @@
 - v2.3:SQLite + FTS5(中文 bigram)检索、`scan` 增量重建、`/v1/stats`
 - v3.0:多库(namespace)、MCP Transport、`Store`/`Index` 接口化
 
+## [2.2.4] - 2026-10-29
+
+### 修复
+
+- **按 README 起容器写不进数据**:示例用的是 `-v "$PWD/brain-data:/data"` 宿主目录绑定,
+  而镜像以 `10001:10001` 运行,新建的宿主目录属 root ⇒ 首次启动直接
+  `PermissionError: [Errno 13] Permission denied: '/data/atoms'`。现在 README 与
+  `docker-compose.yml` 默认改用**命名卷** `brain-data`(Docker 会用镜像里 `/data` 的属主初始化,
+  开箱即用),绑定宿主目录的做法保留为可选项,并写明必须先 `chown 10001:10001`。
+
+### 新增
+
+- 镜像内 `/usr/local/bin/brain` 指向 `/app/bin/brain`,于是
+  `docker exec brain brain token issue ...` / `docker exec brain brain verify` 直接可用。
+- README 增加「与容器对话」与「故障排查」两节(权限、端口占用、unhealthy 三条对照)。
+
+### 验证
+
+- 容器端到端跑通:空库自建 → `healthy` → `token issue` → `remember` → 同 `id` 重放返回
+  `idempotent_replay` → `search` 命中 → `verify` 五项全过 → 重启后数据仍在。
+
 ## [2.2.3] - 2026-10-29
 
 ### 修复
