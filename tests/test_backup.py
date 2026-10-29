@@ -294,6 +294,29 @@ class TestRun(Base):
         self.assertEqual(man["atoms"], 2)
         self.assertEqual(len(man["cipher_sha256"]), 64)
 
+    def test_adopts_existing_snapshots_instead_of_overwriting(self):
+        """目的地里已有老脚本产的快照时,不能从 000001 重新编(会覆盖历史)。"""
+        out = self.tmp / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "brain-000007.age").write_bytes(b"OLD-CIPHERTEXT")
+        (out / "brain-000007.json").write_text(json.dumps(
+            {"seq": 7, "cipher_sha256": "a" * 64}, ensure_ascii=False))
+        r = self.bk.run("manual")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["seq"], 8)
+        self.assertEqual(r["prev_cipher_sha256"], "a" * 64)   # 老快照的 sha 接进链
+        self.assertEqual((out / "brain-000007.age").read_bytes(), b"OLD-CIPHERTEXT")
+        self.assertTrue((out / "brain-000008.age").exists())
+
+    def test_own_index_wins_when_higher_than_destination(self):
+        """本地索引比目的地新(目的地被人清过)时,按索引继续,不回退。"""
+        for _ in range(2):
+            self.bk.run("manual")
+        for p in (self.tmp / "out").glob("brain-*"):
+            p.unlink()
+        r = self.bk.run("manual")
+        self.assertEqual(r["seq"], 3)
+
     def test_failed_destination_does_not_stop_others(self):
         cfg = self.bk.load()
         cfg["destinations"].append({"id": "d2", "type": "local", "enabled": True,

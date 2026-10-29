@@ -252,7 +252,7 @@ what to check if you build your own scheduler or a third destination type.
 
 ## Status
 
-`v2.3.0`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.3.1`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -339,4 +339,4 @@ brain search "预发"             # 之后再找回来
 
 ### 状态
 
-`v2.3.0`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox、**加密备份(管理台可配置/本地+WebDAV/定时/哈希链)**。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.3.1`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox、**加密备份(管理台可配置/本地+WebDAV/定时/哈希链)**。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

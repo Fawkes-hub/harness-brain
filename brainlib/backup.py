@@ -582,6 +582,39 @@ class Backup:
                 pass
         return removed
 
+    # ---------- 接管既有产物 ----------
+    def _probe_existing(self, dests: list["Destination"]) -> tuple[int, str]:
+        """探测目的地里已有的最大快照号,以及它的 `cipher_sha256`。
+
+        为什么要这个:产品上线前可能已经有一批 `brain-NNNNNN.age`(运维脚本产的),
+        或者换了新库却指向同一个目的地目录。如果只看本库的索引,seq 会从 1 重新数,
+        **第一份新备份就会覆盖掉老的 `brain-000001.age`**。所以取"索引"与"目的地实际
+        最大号"的较大值接着编;同时把老那一份的 sha 接进哈希链,链不断。
+        """
+        best = 0
+        for d in dests:
+            try:
+                names = d.listing()
+            except Exception:
+                continue
+            for n in names:
+                m = re.fullmatch(rf"brain-(\d{{{SEQ_WIDTH}}})\.age", n)
+                if m:
+                    best = max(best, int(m.group(1)))
+        if not best:
+            return 0, ""
+        sha = ""
+        for d in dests:      # 先问有这一份的目的地要 sidecar
+            name = f"brain-{best:0{SEQ_WIDTH}d}.json"
+            try:
+                manifest = json.loads(d.get(name).decode("utf-8"))
+            except Exception:
+                continue
+            sha = str(manifest.get("cipher_sha256") or "")
+            if sha:
+                break
+        return best, sha
+
     # ---------- 执行 ----------
     def run(self, trigger: str = "manual") -> dict:
         cfg = self.load()
@@ -597,6 +630,10 @@ class Backup:
             idx = self.index()
             seq = int(idx.get("seq") or 0) + 1
             prev_sha = (idx.get("snapshots") or [{}])[-1].get("cipher_sha256", "")
+            adopted, adopted_sha = self._probe_existing(dests)
+            if adopted >= seq:      # 目的地里已有更老的快照,接着编,绝不覆盖
+                seq = adopted + 1
+                prev_sha = adopted_sha or prev_sha
             tmpdir = Path(self.state_dir / ".snap")
             if tmpdir.exists():
                 shutil.rmtree(tmpdir, ignore_errors=True)
