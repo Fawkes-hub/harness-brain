@@ -6,6 +6,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     BRAIN_ROOT=/data
 
+# age:备份加密用。刻意装发行版包而不是自研加密;发行版版本可能落后,需要更强保证就自己换 1.2.x+
+# ca-certificates:WebDAV 目的地走 HTTPS 时要用
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends age ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # 非 root 运行:uid/gid 固定,便于宿主机目录授权
 RUN groupadd -g 10001 brain \
  && useradd -u 10001 -g brain -d /data -s /usr/sbin/nologin brain \
@@ -23,6 +29,9 @@ VOLUME ["/data"]
 EXPOSE 8790
 
 # 标准库探活,不引入 curl
+# 备份要在容器内跑 age-keygen / age,这里声明一下依赖,免得有人以为镜像是纯 stdlib
+ENV BRAIN_BACKUP_AGE=/usr/bin/age
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8790/v1/health', timeout=2).status == 200 else 1)"]
 

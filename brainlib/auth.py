@@ -25,9 +25,24 @@ class TokenStore:
         self.path = Path(path)
 
     def _load(self) -> dict:
+        """读令牌库。**故意容忍坏文件**:残缺/手改过的 JSON 不该让整个服务起不来。
+
+        缺 `tokens` 键、类型不对、JSON 语法错,一律当成空库处理——反正坏文件里
+        的令牌本来也验不过;这里的目标只是"服务能启动、能重新签一把"。
+        """
         if not self.path.exists():
             return {"salt": "", "tokens": []}
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"salt": "", "tokens": []}
+        if not isinstance(data, dict):
+            return {"salt": "", "tokens": []}
+        if not isinstance(data.get("tokens"), list):
+            data["tokens"] = []
+        if not isinstance(data.get("salt"), str):
+            data["salt"] = ""
+        return data
 
     def _save(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

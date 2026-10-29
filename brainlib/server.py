@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 from . import auth as authmod
+from . import backup as backupmod
 from . import web
 from .brief import render_brief
 from .model import ID_RE, KINDS, Atom, content_hash, new_id, now_iso, parse_iso
@@ -43,6 +44,8 @@ SCOPE_FOR = {
     ("POST", "/v1/journal"): "write",
     ("POST", "/v1/forget"): "write",
     ("POST", "/v1/reindex"): "admin",
+    ("GET", "/v1/backup/status"): "admin",
+    ("POST", "/v1/backup/run"): "admin",
 }
 
 KIND_ORDER = list(KINDS)
@@ -77,6 +80,7 @@ class Brain:
         self.store = Store(self.root)
         self.tokens = authmod.TokenStore(self.root / "state" / "tokens.json")
         self.tokens.init()
+        self.backup = backupmod.Backup(self.root)
         self.lock = threading.Lock()
 
     # ---------- 审计 ----------
@@ -127,7 +131,8 @@ class Brain:
                 .isoformat(timespec="seconds")
         return {
             "ok": True, "api": 1, "server": SERVER_VERSION, "min_client": MIN_CLIENT,
-            "features": ["brief", "search", "recall", "forget", "stale", "conflicts", "ui", "tokens", "audit"],
+            "features": ["brief", "search", "recall", "forget", "stale", "conflicts", "ui",
+                         "tokens", "audit", "backup"],
             "atoms": len(self.store.load_atoms()),
             "views_rev": self.store.current_revision(),
             "root": str(self.root),
@@ -674,6 +679,12 @@ def make_handler(brain: Brain):
                 body = web.system_page(ctx, health, problems, disk,
                                        health.get("last_rebuild", ""), brain.read_audit(10))
                 return self._html(web.layout(ctx, "系统状态", body))
+            if path == "/backup":
+                if not ctx.can("admin"):
+                    return self._forbidden(ctx, "备份配置需要 admin scope。")
+                edit = (q.get("edit") or [""])[0].strip()
+                body = web.backup_page(ctx, brain.backup.status(), brain.backup.public(), edit)
+                return self._html(web.layout(ctx, "备份", body))
             if path == "/logout":
                 return self._redirect("/login", "brain_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             return self._html(web.layout(ctx, "404", web.error_page(
@@ -826,6 +837,126 @@ def make_handler(brain: Brain):
                     brain.store.rebuild(force=True)
                 brain.audit("reindex", _who(rec["author"]), "", "")
                 return self._redirect("/system?msg=reindexed")
+            if u.path == "/backup/run":
+                if not ctx.can("admin"):
+                    return self._forbidden(ctx, "备份需要 admin scope。")
+                if brain.backup.running:
+                    return self._redirect("/backup?err=backup_busy")
+                threading.Thread(target=brain.backup.run, args=("manual",), daemon=True).start()
+                brain.audit("backup_run", _who(rec["author"]), "", "manual")
+                return self._redirect("/backup?msg=backup_started")
+            if u.path == "/backup/dest":
+                if not ctx.can("admin"):
+                    return self._forbidden(ctx, "备份配置需要 admin scope。")
+                form = self._form()
+                action = (form.get("action") or "save").strip()
+                cfg = brain.backup.load()
+                ident = (form.get("id") or "").strip()
+                if action == "delete":
+                    before = len(cfg["destinations"])
+                    cfg["destinations"] = [d for d in cfg["destinations"] if d.get("id") != ident]
+                    if len(cfg["destinations"]) == before:
+                        return self._redirect("/backup?err=not_found")
+                    brain.backup.save(cfg)
+                    brain.backup.recompute_next()
+                    brain.audit("backup_dest", _who(rec["author"]), ident, "delete")
+                    return self._redirect("/backup?msg=dest_deleted")
+                dtype = (form.get("type") or "local").strip()
+                label = (form.get("label") or "").strip()[:40]
+                path = (form.get("path") or "").strip()
+                url = (form.get("url") or "").strip()
+                username = (form.get("username") or "").strip()[:80]
+                password = form.get("password") or ""
+                enabled = bool(form.get("enabled"))
+                if dtype not in ("local", "webdav"):
+                    return self._redirect("/backup?err=bad_dest")
+                if dtype == "local" and not path:
+                    return self._redirect("/backup?err=bad_dest")
+                if dtype == "webdav" and not (url and username):
+                    return self._redirect("/backup?err=bad_dest")
+                if dtype == "webdav" and not url.startswith(("http://", "https://")):
+                    return self._redirect("/backup?err=bad_dest")
+                new_dest = {"id": ident or ("d_" + os.urandom(4).hex()), "type": dtype,
+                            "label": label, "enabled": enabled, "path": path,
+                            "url": url, "username": username}
+                old_dest = next((d for d in cfg["destinations"] if d.get("id") == ident), None)
+                if old_dest and not password:
+                    new_dest["password"] = old_dest.get("password", "")
+                else:
+                    new_dest["password"] = password
+                if action == "test" and old_dest is not None:
+                    try:
+                        dest = brain.backup.make_destination(old_dest)
+                        msg = dest.test()
+                    except Exception as e:  # noqa: BLE001 - 网络/凭据错误都要展示给人看
+                        return self._redirect("/backup?err=bad_dest&detail=" + quote(str(e)[:120]))
+                    brain.audit("backup_dest", _who(rec["author"]), ident, "test ok " + msg)
+                    return self._redirect("/backup?msg=dest_ok")
+                if old_dest is not None:
+                    cfg["destinations"] = [new_dest if d.get("id") == ident else d
+                                           for d in cfg["destinations"]]
+                else:
+                    cfg["destinations"].append(new_dest)
+                brain.backup.save(cfg)
+                brain.backup.recompute_next()
+                brain.audit("backup_dest", _who(rec["author"]), new_dest["id"],
+                            f"{dtype} {label or path or url} enabled={enabled}")
+                return self._redirect("/backup?msg=dest_saved")
+            if u.path == "/backup/schedule":
+                if not ctx.can("admin"):
+                    return self._forbidden(ctx, "备份配置需要 admin scope。")
+                form = self._form()
+                cfg = brain.backup.load()
+                mode = (form.get("mode") or "off").strip()
+                at = (form.get("at") or "03:40").strip()
+                if mode not in ("off", "daily", "weekly", "every"):
+                    return self._redirect("/backup?err=bad_schedule")
+                if not re.fullmatch(r"\d{1,2}:\d{2}", at):
+                    return self._redirect("/backup?err=bad_schedule")
+                hh, mm = (int(x) for x in at.split(":"))
+                if not (0 <= hh < 24 and 0 <= mm < 60):
+                    return self._redirect("/backup?err=bad_schedule")
+
+                def _int(name, default, lo, hi):
+                    try:
+                        return max(lo, min(hi, int((form.get(name) or "").strip() or default)))
+                    except ValueError:
+                        return default
+
+                cfg["enabled"] = bool(form.get("enabled"))
+                cfg["schedule"] = {"mode": mode, "at": f"{hh:02d}:{mm:02d}",
+                                   "weekday": _int("weekday", 0, 0, 6),
+                                   "every_hours": _int("every_hours", 6, 1, 168),
+                                   "jitter_min": _int("jitter_min", 30, 0, 360)}
+                cfg["retention"] = {"daily": _int("daily", 30, 1, 365),
+                                    "keep_monthly": bool(form.get("keep_monthly"))}
+                brain.backup.save(cfg)
+                nxt = brain.backup.recompute_next()
+                brain.audit("backup_config", _who(rec["author"]), "",
+                            f"mode={mode} at={at} enabled={cfg['enabled']} next={nxt}")
+                return self._redirect("/backup?msg=backup_saved")
+            if u.path == "/backup/key":
+                if not ctx.can("admin"):
+                    return self._forbidden(ctx, "变更备份密钥需要 admin scope。")
+                form = self._form()
+                action = (form.get("action") or "").strip()
+                if action == "generate":
+                    try:
+                        pub, priv = brain.backup.gen_key()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"backup gen_key failed: {e}")
+                        return self._redirect("/backup?err=age_missing")
+                    brain.audit("backup_key", _who(rec["author"]), "", "generate")
+                    return self._html(web.layout(ctx, "私钥",
+                                                 web.backup_key_page(ctx, pub, priv,
+                                                                     str(brain.backup.key_path))))
+                rcpt = (form.get("recipient") or "").strip()
+                try:
+                    pub = brain.backup.import_recipient(rcpt)
+                except Exception:  # noqa: BLE001
+                    return self._redirect("/backup?err=key_bad")
+                brain.audit("backup_key", _who(rec["author"]), "", "import")
+                return self._redirect("/backup?msg=key_imported")
             return self._html(web.layout(ctx, "404", web.error_page(
                 ctx, 404, "页面不存在", f"没有 {u.path} 这个页面。")), 404)
 
@@ -887,6 +1018,8 @@ def make_handler(brain: Brain):
                 return self._send(200, brain.stale(max(1, within)))
             if u.path == "/v1/conflicts":
                 return self._send(200, brain.conflicts())
+            if u.path == "/v1/backup/status":
+                return self._send(200, brain.backup.status())
             if u.path == "/v1/recall":
                 try:
                     since = int((q.get("since") or ["7d"])[0].rstrip("d"))
@@ -927,6 +1060,12 @@ def make_handler(brain: Brain):
                     rev = brain.store.rebuild(force=True)
                 brain.audit("reindex", _who(rec["author"]), "", "api")
                 return self._send(200, {"views_rev": rev})
+            if u.path == "/v1/backup/run":
+                if brain.backup.running:
+                    return self._err(409, "backup_busy")
+                threading.Thread(target=brain.backup.run, args=("api",), daemon=True).start()
+                brain.audit("backup_run", _who(rec["author"]), "", "api")
+                return self._send(202, {"started": True})
             return self._err(404, "not_found")
 
     return Handler
@@ -934,6 +1073,8 @@ def make_handler(brain: Brain):
 
 def serve(root: Path, bind: str, port: int) -> None:
     brain = Brain(root)
+    # 进程内调度:页面改完频率就生效,不依赖 cron / systemd
+    backupmod.Scheduler(brain.backup).start()
     httpd = ThreadingHTTPServer((bind, port), make_handler(brain))
     print(f"brain serve on http://{bind}:{port}  root={root}  atoms={len(brain.store.load_atoms())}", flush=True)
     try:

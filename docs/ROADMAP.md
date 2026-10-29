@@ -152,6 +152,38 @@ brain search --include-deprecated 旧条目 | wc -l   # > 默认结果数
 
 ---
 
+## v2.3 备份做成产品功能(已完成)
+
+**产出**
+
+| 产出 | 说明 |
+| --- | --- |
+| `/backup` 管理台页面 | 目的地增删改、频率、保留、密钥、立即备份、快照记录 |
+| `brainlib/backup.py` | 配置 + 快照 + age 加密 + 本地/WebDAV 适配器 + 进程内调度器 + 哈希链 |
+| `GET /v1/backup/status`、`POST /v1/backup/run` | 只读现状 / 触发一次(均 `admin`) |
+| `docs/BACKUP.md` §1 | 页面上的五步操作与四条判据 |
+
+**验收(可复现)**
+
+```bash
+# 1) 页面上点「立即备份」后,状态里必须有三样东西
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8790/v1/backup/status \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['last_ok'] and d['seq']>=1; \
+      assert d['last_report']['destinations']; print('ok', d['seq'])"
+
+# 2) 密文里不许有明文痕迹
+grep -c "kind: fact" <(cat "$DEST"/brain-*.age) || true   # 期望 0
+
+# 3) 快照里不许有私钥与派生视图
+age -d -i state/age.key "$DEST"/brain-000001.age | tar -tzf - | grep -E "age.key|^views/" || echo '干净'
+
+# 4) 恢复后五项全过(见 docs/BACKUP.md §恢复)
+```
+
+**不做**:S3/对象存储适配器、快照签名与带外锚点、恢复按钮(命令行 + 文档覆盖,M4 再做)。
+
+---
+
 ## 不承诺的部分(明确排除)
 
 - 不做 Web UI 的多租户/富文本编辑;v2.2 已提供服务端渲染的管理台(见 README「可视界面」),只做浏览、复核与低风险管理动作。

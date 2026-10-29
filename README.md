@@ -209,6 +209,11 @@ Rules of thumb: **never expose 8790 directly to the internet**; if you put a pro
 
 ## Backups (do this on day one)
 
+**Since v2.3 this ships as a feature, not a script you have to write**: log in to the web console with
+an `admin` token, open **Backup** (`/backup`), generate a key, add one or more destinations
+(local dir / WebDAV), pick a schedule, press *Back up now*. Keys and passwords never come back out of
+the page, every archive is age-encrypted, and each destination is re-read and hash-checked.
+
 The store is a git repo but **a git remote is not a backup**: a hosting provider can read a private
 repo, one mis-click makes it public, and a force-push rewrites history. So:
 
@@ -232,7 +237,8 @@ when you have **restored it and `brain verify` printed five green checks**.
 
 Full reference design — threat model, packaging, key handling, retention, alerting without an LLM in
 the loop, privacy tiers, credential minimisation, first-24-hours playbook, anti-patterns:
-**[docs/BACKUP.md](docs/BACKUP.md)**.
+**[docs/BACKUP.md](docs/BACKUP.md)**. §1 is the five-step walkthrough of the console page; the rest is
+what to check if you build your own scheduler or a third destination type.
 
 ## Configuration
 
@@ -246,7 +252,7 @@ the loop, privacy tiers, credential minimisation, first-24-hours playbook, anti-
 
 ## Status
 
-`v2.2.6`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.3.0`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -314,6 +320,10 @@ brain search "预发"             # 之后再找回来
 
 ### 备份
 
+**v2.3 起这是产品功能,不用自己写脚本**:用 `admin` 令牌登录管理台 → 左边「**备份**」→ 生成密钥 →
+添加目的地(本地目录 / WebDAV)→ 选频率 → 点「立即备份」。密钥和口令**只进不出**,快照一律 age 加密,
+每个目的地写完还要读回来核 sha256。
+
 库本身是 git 仓库,但**"有个 git 远端"不等于备份**:托管方能读私有仓、一次误设就变公开、force-push 会改写历史。所以分四层:
 
 | 层 | 干什么 | 存哪 | 频率 |
@@ -325,8 +335,8 @@ brain search "预发"             # 之后再找回来
 
 硬规则:**明文 atom 永不出网**(私有仓也不行);age 私钥不与密文同机常驻;每份快照带签名 manifest + `prev_cipher_sha256` 哈希链,回滚能被发现;只有**真恢复过一次、`brain verify` 五项全绿**,才算备份成功。
 
-完整参考设计(威胁模型、打包方式、密钥、保留策略、不含 LLM 的告警链、隐私分级、凭据最小化、出事前 24 小时手册、反模式速查)见 **[docs/BACKUP.md](docs/BACKUP.md)**。
+完整参考设计(威胁模型、打包方式、密钥、保留策略、不含 LLM 的告警链、隐私分级、凭据最小化、出事前 24 小时手册、反模式速查)见 **[docs/BACKUP.md](docs/BACKUP.md)**;其 §1 是管理台五步上手,后面各节是"自己写调度器 / 接第三种目的地"时的判据。
 
 ### 状态
 
-`v2.2.6`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.3.0`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox、**加密备份(管理台可配置/本地+WebDAV/定时/哈希链)**。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

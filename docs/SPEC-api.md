@@ -70,6 +70,8 @@ role  = "engineer"
 | `POST /v1/forget`(恢复也用同一个端点,`status: active`)| `write`(见下方「记忆层 DoS」) |
 | `POST /v1/secret/*/exec` | `secret`(默认关闭,仅 unix socket) |
 | `POST /v1/reindex` | `admin` |
+| `GET /v1/backup/status` | `admin` |
+| `POST /v1/backup/run` | `admin` |
 
 > **记忆层 DoS**:任何持有 `write` 的端都能 `forget` 任意 atom。泄漏一把端 token 就能逐条隐藏整个库。
 > 缓解:`retract` 必须带 `replaced_by`(不能凭消失);forget 请求体只有单 id,**不提供 batch**;
@@ -268,6 +270,35 @@ role  = "engineer"
 ### 3.9 `POST /v1/reindex`
 
 重建 `views/` 与 FTS。返回 `{"views_rev": "...", "atoms": 128, "duration_ms": 42}`。运维用途,不需常规调用。
+
+### 3.10 `GET /v1/backup/status`(`admin`)
+
+备份子系统的现状。**不含任何凭据明文**,只回目的地类型/名称与是否启用。
+
+```json
+{ "enabled": true, "running": false,
+  "age_available": true, "has_key": true,
+  "recipient": "age1…",
+  "schedule": {"mode": "daily", "at": "03:40", "jitter_min": 30},
+  "next_run": "2026-10-30T03:47:01+08:00",
+  "last_run": "2026-10-29T14:09:12+08:00", "last_ok": true, "last_seq": 1,
+  "last_report": {"ok": true, "seq": 1, "atoms": 1, "cipher_size": 1001,
+                  "destinations": {"d1": {"type": "local", "ok": true, "ms": 9}}},
+  "destinations": [{"id": "d1", "type": "local", "label": "local", "enabled": true}],
+  "snapshots": [{"seq": 1, "created_at": "…", "atoms": 1, "cipher_size": 1001,
+                 "cipher_sha256": "…", "prev_cipher_sha256": ""}],
+  "seq": 1 }
+```
+
+### 3.11 `POST /v1/backup/run`(`admin`)
+
+立刻跑一份(异步执行,立刻返回)。已有备份在跑时返回 `409 backup_busy`。
+
+```json
+{"started": true}
+```
+
+进度与结果看 `GET /v1/backup/status` 的 `running` / `last_report`。
 
 ---
 

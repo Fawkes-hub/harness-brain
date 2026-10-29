@@ -4,6 +4,39 @@
 版本号采用 [语义化版本](https://semver.org/lang/zh-CN/)。
 数据格式与 API 的兼容边界见 `docs/SPEC-api.md` 与 `docs/DESIGN.md`。
 
+## [2.3.0] - 2026-10-29
+
+### 新增
+
+- **备份搬进管理台**(`/backup`,需 `admin`):目的地、频率、保留策略、加密公钥全在页面上配,
+  改完立刻生效,**不用登服务器改 crontab**。这是把原来只能靠运维脚本做的事变成产品功能。
+  - 目的地可增删改,首批两种类型:**本地目录** 与 **WebDAV**;每行可「测试」「删除」。
+    凭据存在 `state/backup.json`(0600),页面与接口只回「已保存」,**永不回显明文**。
+  - 频率:关闭 / 每天 / 每周几 / 每隔 N 小时,带**按库固定的抖动**(多台机器不会同一分钟一起上传)。
+  - 保留:保留 N 份;每月 1 号那份永久保留。
+  - 加密:页面「重新生成密钥」调 `age-keygen`,私钥写 `state/age.key`(0600)并在页面**只显示一次**;
+    也可导入已有公钥。服务器上没有 age 时页面直接拦住,不允许降级成明文。
+- **进程内调度器**(`brainlib/backup.py` 的 `Scheduler`):不依赖 cron / systemd;库重启后按
+  `next_run` 补跑;手动与自动共用一把锁,不会并发产出两份 seq。
+- **快照口径**:整个库目录 tar(**排除 `views/`**——纯派生可 `reindex` 重建;**排除 `state/age.key`**
+  ——密钥绝不与密文同行),gzip,再 `age -R` 加密。每份附 `.json` sidecar:
+  seq / atoms / tombstones / `cipher_sha256` / **`prev_cipher_sha256`(哈希链,回滚能发现)**。
+- **每个目的地都读回校验**:写完再读回来比 sha256;某个目的地失败**不阻断**其他目的地,
+  报告里逐个记 `ok/error/ms`。
+- **API**:`GET /v1/backup/status`、`POST /v1/backup/run`(均需 `admin`);`/v1/health` 的 `features` 增加 `backup`。
+
+### 修复
+
+- `state/tokens.json` 残缺或手改坏(缺 `tokens` 键、类型不对、JSON 语法错)会让 `serve` 直接
+  `KeyError` 起不来;现在一律当空库处理 —— 坏文件里的令牌本来就验不过,但服务必须能启动、能重签一把。
+
+### 文档
+
+- `docs/BACKUP.md`:新增「在管理台里配置」作为主路径;原来的 shell + systemd 路线降级为
+  「无 UI 部署」的参考实现,并写明两者的取舍。
+- 单测 65 → 88(备份模块 23 项:配置脱敏、快照排除项、本地/WebDAV 适配器、哈希链、保留策略、
+  部分失败、四种频率、抖动确定性、调度触发;另含 2 项令牌文件加固回归)。
+
 ## [Unreleased]
 
 ### 文档

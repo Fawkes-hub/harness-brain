@@ -41,6 +41,8 @@ STATUS_CLASS = {"active": "st-ok", "deprecated": "st-warn", "retracted": "st-dan
 ACTION_LABEL = {
     "remember": "写入记忆", "forget": "变更状态", "renew": "续期",
     "reindex": "重建视图", "token_issue": "签发令牌", "token_revoke": "吊销令牌",
+    "backup_run": "手动备份", "backup_config": "改备份配置",
+    "backup_dest": "改备份目的地", "backup_key": "变更备份密钥",
 }
 
 MSG = {
@@ -51,6 +53,12 @@ MSG = {
     "renewed": ("已续期,并生成一条取代旧记录的新记忆", "ok"),
     "revoked": ("令牌已吊销", "ok"),
     "reindexed": ("视图已重建", "ok"),
+    "backup_started": ("备份已开始,跑完刷新页面看结果", "ok"),
+    "backup_saved": ("备份配置已保存", "ok"),
+    "dest_saved": ("目的地已保存", "ok"),
+    "dest_deleted": ("目的地已删除", "ok"),
+    "dest_ok": ("目的地连通", "ok"),
+    "key_imported": ("公钥已导入", "ok"),
     "logged_out": ("已退出登录", "ok"),
 }
 ERRS = {
@@ -64,6 +72,12 @@ ERRS = {
     "bad_ttl": ("有效期格式应为 YYYY-MM-DD", "err"),
     "forbidden": ("当前令牌没有执行该操作的权限", "err"),
     "bad_token_form": ("令牌参数不合法:身份只能用字母数字与 - _ .", "err"),
+    "backup_busy": ("已有一份备份在跑,等它结束再来", "err"),
+    "age_missing": ("服务器上找不到 age / age-keygen,无法加密备份", "err"),
+    "bad_dest": ("目的地参数不完整:本地目录要填路径,WebDAV 要填地址和用户名", "err"),
+    "bad_schedule": ("频率或保留参数不合法", "err"),
+    "key_bad": ("公钥格式不对,应形如 age1…", "err"),
+    "backup_failed": ("备份没有成功,原因见页面上的最近报告", "err"),
     "csrf": ("请求来源校验失败,请刷新页面后重试", "err"),
 }
 
@@ -371,6 +385,7 @@ NAV = [
         ("key", "访问令牌", "/tokens", None),
         ("activity", "活动审计", "/activity", None),
         ("server", "系统状态", "/system", None),
+        ("shield", "备份", "/backup", None),
     ]),
 ]
 
@@ -390,7 +405,7 @@ def _nav(ctx: Ctx) -> str:
     for group, items in NAV:
         links = []
         for icon_name, label, href, count_key in items:
-            if href in ("/tokens", "/activity") and not ctx.can("admin"):
+            if href in ("/tokens", "/activity", "/backup") and not ctx.can("admin"):
                 continue
             active = _active(ctx.path, href)
             badge = ""
@@ -1573,3 +1588,265 @@ MAIN_JS = """(function(){
   });}
   document.querySelectorAll('.sidebar a.nav-item').forEach(function(a){a.addEventListener('click',function(){body.classList.remove('nav-open')});});
 })();"""
+
+# ---------------------------------------------------------------- 备份
+
+def _size(n) -> str:
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "—"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GB"
+
+
+def _dest_where(d: dict) -> str:
+    if d.get("type") == "webdav":
+        return d.get("url") or "(未填地址)"
+    return d.get("path") or "(未填路径)"
+
+
+def _dest_badge(d: dict) -> str:
+    label = {"local": "本地目录", "webdav": "WebDAV"}.get(d.get("type", ""), d.get("type", "?"))
+    return f'<span class="chip mini">{esc(label)}</span>'
+
+
+def backup_page(ctx: Ctx, st: dict, cfg: dict, edit_id: str = "") -> str:
+    sched = cfg.get("schedule") or {}
+    ret = cfg.get("retention") or {}
+    dests = cfg.get("destinations") or []
+    last = st.get("last") or {}
+    reports = last.get("destinations") or {}
+    editing = next((d for d in dests if d.get("id") == edit_id), None)
+
+    alerts = []
+    if not st.get("age_available"):
+        alerts.append(
+            '<div class="alert err">' + icon("alert", 18) +
+            '<div><b>服务器上找不到 age</b><span>备份必须先加密,没有 age 就不会产出任何密文文件。'
+            '安装 <code>apt install age</code>(或把官方静态二进制放进 PATH)后,重新生成密钥。</span></div></div>')
+    if not st.get("recipient"):
+        alerts.append(
+            '<div class="alert warn">' + icon("shield", 18) +
+            '<div><b>还没有配置收件人公钥</b><span>先在「加密密钥」里生成或导入一把 age 公钥;'
+            '私钥只显示一次,请存到离线介质。</span></div></div>')
+    if not cfg.get("enabled", True):
+        alerts.append(
+            '<div class="alert warn">' + icon("alert", 18) +
+            '<div><b>备份已停用</b><span>手动备份也跑不起来;要恢复自动备份请勾回「启用备份」。</span></div></div>')
+    if st.get("running"):
+        alerts.append(
+            '<div class="alert warn">' + icon("refresh", 18) +
+            '<div><b>正在备份…</b><span>跑完刷新本页看结果。<a class="btn sm" href="/backup">刷新</a></span></div></div>')
+    if last and not last.get("ok"):
+        alerts.append(
+            '<div class="alert err">' + icon("alert", 18) +
+            '<div><b>上次备份失败</b><span>' +
+            esc(last.get("error") or "有目的地失败,详见下方报告") + '</span></div></div>')
+
+    stats = "".join([
+        stat(esc(when(last.get("created_at") or st.get("last_run") or "")
+                 if (last.get("created_at") or st.get("last_run")) else "还没有"),
+             "上次备份",
+             esc(("成功" if last.get("ok") else "失败") + " · " + str(last.get("trigger") or ""))
+             if last else "还没有跑过", "clock",
+             "ok" if last.get("ok") else ""),
+        stat(esc(when(st["next_run"]) if st.get("next_run") else "—"), "下次计划",
+             "按下面的频率自动执行" if st.get("next_run") else "在「自动备份」里选一个频率", "refresh", ""),
+        stat(str(len(st.get("snapshots") or [])), "快照记录",
+             "seq 到 " + str(st.get("last_seq") or 0), "database", ""),
+        stat(_size(last.get("cipher_size")), "最近体积",
+             (str(last.get("atoms", 0)) + " 条记忆") if last else "—", "file", ""),
+    ])
+
+    rows = []
+    for d in dests:
+        key = d.get("id", "")
+        rep = reports.get(key) or {}
+        if rep:
+            tone, word = ("st-ok", "成功") if rep.get("ok") else ("st-danger", "失败")
+            state = '<span class="status %s">%s</span>' % (tone, word)
+            if not rep.get("ok"):
+                state += '<div class="muted small">' + esc(rep.get("error", "")) + '</div>'
+        else:
+            state = '<span class="status">未跑过</span>'
+        rows.append(
+            '<tr><td>' + _dest_badge(d) +
+            '<div class="muted small">' + esc(d.get("label") or "") + '</div></td>'
+            '<td class="mono-sm" style="word-break:break-all">' + esc(_dest_where(d)) + '</td>'
+            '<td>' + ('<span class="status st-ok">启用</span>' if d.get("enabled", True)
+                      else '<span class="status">停用</span>') + '</td>'
+            '<td data-label="最近">' + state + '</td>'
+            '<td data-label="操作" class="nowrap">'
+            '<a class="btn sm" href="/backup?edit=' + esc(key) + '">编辑</a>'
+            '<form method="post" action="/backup/dest" class="inline">'
+            '<input type="hidden" name="id" value="' + esc(key) + '">'
+            '<input type="hidden" name="action" value="test">'
+            '<button class="btn sm" type="submit">测试</button></form>'
+            '<form method="post" action="/backup/dest" class="inline" '
+            'data-confirm="删除这个目的地?已上传的快照不会被清理。">'
+            '<input type="hidden" name="id" value="' + esc(key) + '">'
+            '<input type="hidden" name="action" value="delete">'
+            '<button class="btn sm danger" type="submit">删除</button></form>'
+            '</td></tr>')
+    if not rows:
+        rows.append('<tr><td colspan="5" class="muted">还没有目的地。至少加一个,否则备份无处可去。</td></tr>')
+
+    e = editing or {}
+    pw_hint = "已保存,留空表示不修改" if e.get("password_set") else "可选"
+    cancel = '<a class="btn" href="/backup">取消编辑</a>' if editing else ""
+    dest_form = (
+        '<form method="post" action="/backup/dest" class="form-body">'
+        '<input type="hidden" name="action" value="save">'
+        '<input type="hidden" name="id" value="' + esc(e.get("id", "")) + '">'
+        '<div class="form-grid">'
+        '<div class="field"><label for="dtype">类型</label>' +
+        select("type", [("local", "本地目录"), ("webdav", "WebDAV")], e.get("type", "local")) + '</div>'
+        '<div class="field"><label for="dlabel">名称</label>'
+        '<input id="dlabel" name="label" maxlength="40" value="' + esc(e.get("label", "")) +
+        '" placeholder="例如 外置硬盘 / 网盘"></div>'
+        '<div class="field"><label for="dpath">本地路径(本地目录填)</label>'
+        '<input id="dpath" name="path" value="' + esc(e.get("path", "")) +
+        '" placeholder="/backup/brain"></div>'
+        '<div class="field"><label for="durl">WebDAV 目录地址(WebDAV 填)</label>'
+        '<input id="durl" name="url" value="' + esc(e.get("url", "")) +
+        '" placeholder="https://dav.example.com/brain/"></div>'
+        '<div class="field"><label for="duser">WebDAV 用户名</label>'
+        '<input id="duser" name="username" value="' + esc(e.get("username", "")) +
+        '" autocomplete="off"></div>'
+        '<div class="field"><label for="dpw">WebDAV 密码</label>'
+        '<input id="dpw" name="password" type="password" value="" autocomplete="new-password" '
+        'placeholder="' + esc(pw_hint) + '"></div>'
+        '</div>'
+        '<label class="check"><input type="checkbox" name="enabled" value="1"' +
+        (' checked' if e.get("enabled", True) else "") + '><span>启用这个目的地</span></label>'
+        '<div class="form-actions"><button class="btn primary" type="submit">' + icon("check", 16) +
+        ('保存修改' if editing else '添加目的地') + '</button>' + cancel + '</div>'
+        '<p class="hint">密码保存在 <code>state/backup.json</code>(0600);接口与页面只回「已保存」,永不回显明文。</p>'
+        '</form>')
+
+    mode_opts = [("off", "关闭(只手动)"), ("daily", "每天"), ("weekly", "每周"), ("every", "每隔 N 小时")]
+    weekday_opts = [(str(i), n) for i, n in
+                    enumerate(["周一", "周二", "周三", "周四", "周五", "周六", "周日"])]
+    schedule_form = (
+        '<form method="post" action="/backup/schedule" class="form-body">'
+        '<div class="form-grid">'
+        '<div class="field"><label for="smode">频率</label>' +
+        select("mode", mode_opts, sched.get("mode", "off")) + '</div>'
+        '<div class="field"><label for="sat">时间</label>'
+        '<input id="sat" name="at" type="time" value="' + esc(sched.get("at", "03:40")) + '"></div>'
+        '<div class="field"><label for="sday">星期几(每周)</label>' +
+        select("weekday", weekday_opts, str(sched.get("weekday", 0))) + '</div>'
+        '<div class="field"><label for="severy">间隔小时(每隔)</label>'
+        '<input id="severy" name="every_hours" type="number" min="1" max="168" value="' +
+        esc(sched.get("every_hours", 6)) + '"></div>'
+        '<div class="field"><label for="sjit">随机抖动(分钟)</label>'
+        '<input id="sjit" name="jitter_min" type="number" min="0" max="360" value="' +
+        esc(sched.get("jitter_min", 30)) + '"></div>'
+        '<div class="field"><label for="rkeep">保留份数</label>'
+        '<input id="rkeep" name="daily" type="number" min="1" max="365" value="' +
+        esc(ret.get("daily", 30)) + '"></div>'
+        '</div>'
+        '<label class="check"><input type="checkbox" name="keep_monthly" value="1"' +
+        (' checked' if ret.get("keep_monthly", True) else "") +
+        '><span>每月第一天的快照永久保留</span></label>'
+        '<label class="check"><input type="checkbox" name="enabled" value="1"' +
+        (' checked' if cfg.get("enabled", True) else "") +
+        '><span>启用备份(含手动)</span></label>'
+        '<div class="form-actions"><button class="btn primary" type="submit">' + icon("check", 16) +
+        '保存</button></div>'
+        '<p class="hint">抖动是给这份库固定的偏移量,避免多台机器同一分钟一起上传;'
+        '页面显示的下次时间已含抖动。</p></form>')
+
+    if st.get("recipient"):
+        key_body = (
+            '<p class="muted">当前收件人公钥(加密用,可公开):</p>'
+            '<div class="token-box"><code id="rcpt">' + esc(st["recipient"]) + '</code>'
+            '<button class="btn" type="button" data-copy-target="#rcpt">' + icon("copy", 16) +
+            '复制</button></div>'
+            '<p class="hint">私钥在 <code>' + esc(st.get("key_path", "state/age.key")) +
+            '</code>(0600),<b>不在任何快照里</b> —— 请另行离线保存一份,'
+            '否则硬盘坏了密文也打不开。</p>'
+            '<form method="post" action="/backup/key"><input type="hidden" name="action" value="generate">'
+            '<button class="btn danger" type="submit" '
+            'data-confirm="重新生成会让旧密文无法用新私钥解开,确定?">' + icon("key", 16) +
+            '重新生成密钥</button></form>')
+    else:
+        key_body = (
+            '<p class="muted">还没有密钥。生成一把(推荐),或粘贴一把已有的 age 公钥。</p>'
+            '<form method="post" action="/backup/key" class="inline">'
+            '<input type="hidden" name="action" value="generate">'
+            '<button class="btn primary" type="submit">' + icon("key", 16) + '生成密钥</button></form>'
+            '<form method="post" action="/backup/key" class="form-body">'
+            '<input type="hidden" name="action" value="import">'
+            '<div class="field"><label for="rcptin">已有 age 公钥</label>'
+            '<input id="rcptin" name="recipient" placeholder="age1..."></div>'
+            '<div class="form-actions"><button class="btn" type="submit">导入公钥</button></div></form>')
+
+    snap_rows = []
+    for sn in (st.get("snapshots") or []):
+        dest_cell = " ".join(
+            '<span class="status %s">%s</span>' % ("st-ok" if v.get("ok") else "st-danger", esc(k))
+            for k, v in (sn.get("destinations") or {}).items()) or '<span class="muted">—</span>'
+        snap_rows.append(
+            '<tr><td class="mono-sm">#' + esc(sn.get("seq")) + '</td>'
+            '<td class="nowrap">' + esc(when(sn.get("created_at", ""))) + '</td>'
+            '<td class="mono-sm">' + esc(sn.get("atoms", "—")) + '</td>'
+            '<td class="mono-sm">' + _size(sn.get("cipher_size")) + '</td>'
+            '<td class="mono-sm" title="' + esc(sn.get("cipher_sha256", "")) + '">' +
+            esc((sn.get("cipher_sha256") or "")[:12]) + '…</td>'
+            '<td>' + dest_cell + '</td></tr>')
+    if not snap_rows:
+        snap_rows.append('<tr><td colspan="6" class="muted">还没有快照记录。</td></tr>')
+
+    actions = ('<form method="post" action="/backup/run" class="inline" '
+               'data-confirm="现在立刻做一次备份?">'
+               '<button class="btn primary" type="submit">' + icon("shield", 16) +
+               '立即备份</button></form>')
+
+    return (
+        page_head("备份", "加密快照 · 目的地、频率、密钥都在这里配,不用登服务器", actions=actions) +
+        "".join(alerts) +
+        '<div class="stat-grid">' + stats + '</div>'
+        '<section class="card"><div class="card-head"><h3 class="card-title">目的地</h3>'
+        '<span class="count">' + str(len(dests)) + '</span></div>'
+        '<div class="table-wrap"><table class="tbl"><thead><tr><th>类型</th><th>位置</th>'
+        '<th>状态</th><th>最近结果</th><th>操作</th></tr></thead><tbody>' +
+        "".join(rows) + '</tbody></table></div></section>'
+        '<section class="card"><div class="card-head"><h3 class="card-title">' +
+        ('编辑目的地' if editing else '添加目的地') + '</h3></div>'
+        '<div class="card-body">' + dest_form + '</div></section>'
+        '<section class="card"><div class="card-head"><h3 class="card-title">自动备份与保留</h3></div>'
+        '<div class="card-body">' + schedule_form + '</div></section>'
+        '<section class="card"><div class="card-head"><h3 class="card-title">加密密钥</h3></div>'
+        '<div class="card-body">' + key_body + '</div></section>'
+        '<section class="card"><div class="card-head"><h3 class="card-title">快照记录</h3>'
+        '<span class="count">' + str(len(st.get("snapshots") or [])) + '</span></div>'
+        '<div class="table-wrap"><table class="tbl"><thead><tr><th>seq</th><th>时间</th>'
+        '<th>记忆数</th><th>体积</th><th>sha256</th><th>目的地</th></tr></thead><tbody>' +
+        "".join(snap_rows) + '</tbody></table></div></section>'
+        '<p class="hint">恢复步骤见 <code>docs/BACKUP.md</code>:解密 → 解包 → 起服务 → '
+        '<code>brain verify</code> 五项全过。快照里不含 <code>views/</code>(可重建)'
+        '与 age 私钥(必须离线另存)。</p>')
+
+
+def backup_key_page(ctx: Ctx, pub: str, priv: str, key_path: str) -> str:
+    return (
+        page_head("私钥已生成", "只显示这一次,离开本页后无法再次查看") +
+        '<div class="alert err">' + icon("alert", 18) +
+        '<div><b>现在抄走它</b><span>私钥不会写进任何快照,也不会再显示。'
+        '丢了它 = 所有密文变废纸,没有找回途径。</span></div></div>'
+        '<section class="card"><div class="card-body">'
+        '<p class="muted">收件人公钥(加密用,可公开)</p>'
+        '<div class="token-box"><code>' + esc(pub) + '</code></div>'
+        '<p class="muted" style="margin-top:16px">私钥(解密用,存到离线介质后从这里删掉)</p>'
+        '<div class="token-box"><code id="priv-key">' + esc(priv) + '</code>'
+        '<button class="btn" type="button" data-copy-target="#priv-key">' + icon("copy", 16) +
+        '复制</button></div>'
+        '<p class="hint">服务器上已保存一份在 <code>' + esc(key_path) + '</code>(0600) 供自动备份使用;'
+        '但它是单点 —— 请用 U 盘 / 密码管理器 / 打印纸另存一份。</p>'
+        '<div class="form-actions"><a class="btn primary" href="/backup">我已妥善保存,返回备份页</a></div>'
+        '</div></section>')
