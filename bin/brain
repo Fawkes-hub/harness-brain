@@ -28,9 +28,14 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-ROOT = Path(os.environ.get("BRAIN_ROOT") or Path(__file__).resolve().parent.parent).resolve()
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# 代码位置与数据位置是两件事:容器里代码在 /app、数据在 /data。
+# 早先把「数据根」当成 sys.path 入口,结果只要设了 BRAIN_ROOT 就 import 不到 brainlib
+# —— 空库 + 容器这种最常见的新手场景会直接 ModuleNotFoundError。
+CODE_ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(os.environ.get("BRAIN_ROOT") or CODE_ROOT).resolve()
+for _p in (str(CODE_ROOT), str(ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 INBOX = ROOT / "inbox"
 ARCHIVE = INBOX / "archive"
 
@@ -429,6 +434,29 @@ def cmd_hosts(a: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------- v2 数据层
+def cmd_init(args) -> int:
+    """把一个空目录初始化成合法库根。重复执行安全。"""
+    from brainlib.store import ensure_layout
+    ROOT.mkdir(parents=True, exist_ok=True)
+    made = ensure_layout(ROOT)
+    print(f"库根: {ROOT}")
+    print("创建: " + ("、".join(made) if made else "无(已经是初始化状态)"))
+    # 新库的 views/.revision 还没生成,verify 会报"视图与数据不一致" —— 先重建一次。
+    rev = _store().rebuild(force=True)
+    print(f"视图已生成 revision={rev[:20]}…")
+    if not (ROOT / ".git").exists():
+        try:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=ROOT, check=True)
+            print("已 git init(建议再加一个**私有**远端:git remote add origin <url>)")
+        except Exception as e:  # git 缺失或旧版本不支持 -b
+            print(f"跳过 git init: {e}", file=sys.stderr)
+    print("""下一步:
+  1) 签一把令牌   brain token issue --host server --harness cli --role engineer
+  2) 起服务       brain serve --bind 127.0.0.1 --port 8790
+  3) 会话开头读   brain brief --budget 6000""")
+    return 0
+
+
 def is_v2() -> bool:
     return (ROOT / "atoms").exists()
 
@@ -680,7 +708,11 @@ def v2_sync(a) -> int:
 
 
 def v2_serve(a) -> int:
+    from brainlib.store import ensure_layout
     from brainlib.server import serve
+    if not (ROOT / "atoms").exists():
+        made = ensure_layout(ROOT)
+        print(f"空库,已初始化骨架: {'、'.join(made) or '无'} (根={ROOT})", flush=True)
     serve(ROOT, a.bind, a.port)
     return 0
 
@@ -721,7 +753,7 @@ def v2_main(a) -> int:
         "forget": v2_forget, "restore": v2_restore, "verify": v2_verify,
         "reindex": v2_reindex, "whoami": v2_whoami, "show": cmd_show,
         "doctor": v2_doctor, "hosts": cmd_hosts, "sync": v2_sync,
-        "serve": v2_serve, "token": v2_token,
+        "serve": v2_serve, "token": v2_token, "init": cmd_init,
     }
     return table[a.cmd](a)
 
@@ -784,6 +816,9 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="环境自检")
     d.set_defaults(func=cmd_doctor)
 
+    ini = sub.add_parser("init", help="v2:初始化一个空库(幂等)")
+    ini.set_defaults(func=None)
+
     sv = sub.add_parser("serve", help="v2:启动 HTTP 服务")
     sv.add_argument("--bind", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8790)
@@ -826,11 +861,11 @@ def main(argv: list[str] | None = None) -> int:
         global ROOT, INBOX, ARCHIVE
         ROOT = Path(args.root).expanduser().resolve()
         INBOX, ARCHIVE = ROOT / "inbox", ROOT / "inbox" / "archive"
-    if not ROOT.is_dir():
-        print(f"库根目录不存在: {ROOT}", file=sys.stderr)
+    if not ROOT.is_dir() and getattr(args, "cmd", "") != "init":
+        print(f"库根目录不存在: {ROOT}\n  先执行初始化: brain --root {ROOT} init", file=sys.stderr)
         return 2
-    if is_v2() and hasattr(args, "cmd") and args.cmd in {
-            "brief", "search", "remember", "forget", "restore", "verify",
+    if hasattr(args, "cmd") and args.cmd in {
+            "init", "brief", "search", "remember", "forget", "restore", "verify",
             "reindex", "whoami", "show", "doctor", "hosts", "sync",
             "serve", "token"}:
         return v2_main(args)

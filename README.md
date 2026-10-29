@@ -62,7 +62,7 @@ docker run -d --name brain \
   -v "$PWD/brain-data:/data" \
   --restart unless-stopped \
   --memory 256m \
-  ghcr.io/Fawkes-hub/harness-brain:2.2.2
+  ghcr.io/Fawkes-hub/harness-brain:2.2.3
 ```
 
 ### docker compose
@@ -78,6 +78,7 @@ docker compose up -d          # data lands in ./data
 git clone https://github.com/Fawkes-hub/harness-brain.git /opt/harness-brain
 sudo useradd -r -s /usr/sbin/nologin brain
 sudo mkdir -p /srv/brain && sudo chown brain: /srv/brain
+sudo -u brain BRAIN_ROOT=/srv/brain python3 /opt/harness-brain/bin/brain init
 sudo -u brain BRAIN_ROOT=/srv/brain python3 /opt/harness-brain/bin/brain serve --bind 0.0.0.0 --port 8790
 ```
 
@@ -104,6 +105,9 @@ WantedBy=multi-user.target
 ## Five-minute walkthrough
 
 ```bash
+# 0. one-time: create the store layout (idempotent; the container does this on first start)
+BRAIN_ROOT=/srv/brain ./bin/brain init
+
 # 1. issue a scoped token for one machine (plaintext is printed exactly once)
 BRAIN_ROOT=/srv/brain ./bin/brain token issue \
     --host laptop --harness cli --role engineer --scope read,write --ttl 365
@@ -202,7 +206,7 @@ Restore drill monthly: unpack a bundle into a scratch dir, run `brain verify`, e
 
 ## Status
 
-`v2.2.2`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.2.3`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -246,7 +250,7 @@ Issues and PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Securi
 ```bash
 # 1) 起服务(容器,数据在 ./data)
 docker run -d --name brain -p 127.0.0.1:8790:8790 -v "$PWD/brain-data:/data" \
-  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.2
+  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.3
 
 # 2) 给每台机器签一把自己的令牌(明文只显示一次)
 BRAIN_ROOT=./brain-data ./bin/brain token issue --host laptop --harness cli --role engineer
@@ -271,4 +275,4 @@ brain search "预发"             # 之后再找回来
 
 ### 状态
 
-`v2.2.2`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.2.3`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

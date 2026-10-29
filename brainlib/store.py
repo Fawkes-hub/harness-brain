@@ -45,6 +45,31 @@ def atomic_write(path: Path, text: str) -> None:
     _fsync_dir(path.parent)
 
 
+def ensure_layout(root: "Path | str") -> list[str]:
+    """创建一个空库该有的骨架;已存在的东西一律不碰。返回本次真实创建项。
+
+    为什么要这个:此前 CLI 把「有没有 atoms/」当作「是不是 v2 库」的判据,
+    于是全新的空目录下 `brain serve` 会掉进 v1 代码路径并以 AttributeError 退出
+    —— 第一次用容器的人第一步就撞墙。空库是合法状态,不该靠猜。
+    """
+    root = Path(root)
+    made: list[str] = []
+    for d in ("atoms", "views", "state", "profiles"):
+        path = root / d
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+            made.append(d + "/")
+    tomb = root / "tombstones.jsonl"
+    if not tomb.exists():
+        tomb.write_text("", encoding="utf-8")
+        made.append("tombstones.jsonl")
+    gi = root / ".gitignore"
+    if not gi.exists():
+        gi.write_text("# 派生层与运行时状态不入库\nviews/\nstate/\nprofiles/\n__pycache__/\n", encoding="utf-8")
+        made.append(".gitignore")
+    return made
+
+
 class Store:
     def __init__(self, root: Path):
         self.root = Path(root)

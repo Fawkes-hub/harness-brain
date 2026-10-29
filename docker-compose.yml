@@ -1,7 +1,7 @@
 # 单容器部署:数据卷持久化,端口只绑本机(要让局域网访问改成 "0.0.0.0:8790:8790")
 services:
   brain:
-    image: ghcr.io/Fawkes-hub/harness-brain:2.2.2
+    image: ghcr.io/Fawkes-hub/harness-brain:2.2.3
     # 想直接从源码构建:去掉上面一行,取消下一行注释
     # build: .
     container_name: brain

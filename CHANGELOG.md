@@ -12,6 +12,24 @@
 - v2.3:SQLite + FTS5(中文 bigram)检索、`scan` 增量重建、`/v1/stats`
 - v3.0:多库(namespace)、MCP Transport、`Store`/`Index` 接口化
 
+## [2.2.3] - 2026-10-29
+
+### 修复
+
+- **空库起不来**(发布后第一次拉镜像就撞上):CLI 用「有没有 `atoms/`」当「是不是 v2 库」的判据,
+  空目录于是掉进 v1 代码路径,`brain serve` 以 `AttributeError: 'Namespace' object has no attribute 'func'`
+  退出。现在按子命令名分派,与目录状态无关。
+- **设了 `BRAIN_ROOT` 就 `ModuleNotFoundError: brainlib`**:代码根与数据根被混成一个 `sys.path` 入口,
+  容器里(代码 `/app`、数据 `/data`)连 `brain --version` 都跑不起来。现在两者分别入 `sys.path`。
+
+### 新增
+
+- `brain init`:幂等地把一个空目录初始化成合法库根(建 `atoms/ views/ state/ profiles/`、
+  `tombstones.jsonl`、`.gitignore`,`git init`,并重建视图让 `verify` 立刻五项全过)。
+  `brain serve` 遇到空库也会自动初始化 —— 容器首次启动不需要任何手工步骤。
+- `tests/test_cli.py`:5 个 CLI 级回归用例(空库 `--version` / `init` / `verify` / 幂等 / 不落 v1 路径),
+  专门守住上面这两个坑;单测总数 57 → 62。
+
 ## [2.2.2] - 2026-10-29
 
 ### 修复
