@@ -62,7 +62,7 @@ docker run -d --name brain \
   -v "$PWD/brain-data:/data" \
   --restart unless-stopped \
   --memory 256m \
-  ghcr.io/Fawkes-hub/harness-brain:2.2.1
+  ghcr.io/Fawkes-hub/harness-brain:2.2.2
 ```
 
 ### docker compose
@@ -202,7 +202,7 @@ Restore drill monthly: unpack a bundle into a scratch dir, run `brain verify`, e
 
 ## Status
 
-`v2.2.1`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
+`v2.2.2`. Implemented: atom store, tombstones, derived views, `verify`, HTTP API, scoped tokens,
 admin UI, brief/search/recall, offline outbox. Not yet: encrypted secrets (`brain secret`),
 SQLite+FTS5 retrieval, MCP transport, namespaces/multi-user. See [ROADMAP](docs/ROADMAP.md).
 
@@ -246,7 +246,7 @@ Issues and PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Securi
 ```bash
 # 1) 起服务(容器,数据在 ./data)
 docker run -d --name brain -p 127.0.0.1:8790:8790 -v "$PWD/brain-data:/data" \
-  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.1
+  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.2
 
 # 2) 给每台机器签一把自己的令牌(明文只显示一次)
 BRAIN_ROOT=./brain-data ./bin/brain token issue --host laptop --harness cli --role engineer
@@ -271,4 +271,4 @@ brain search "预发"             # 之后再找回来
 
 ### 状态
 
-`v2.2.1`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。
+`v2.2.2`。已实现:atom 存储、tombstone、派生视图、`verify`、HTTP API、令牌、管理台、brief/search/recall、离线 outbox。未实现:加密密钥(`brain secret`)、SQLite+FTS5 检索、MCP 传输、namespace 多用户。见 [ROADMAP](docs/ROADMAP.md);版本策略见 [docs/VERSIONING.md](docs/VERSIONING.md);接口见 [docs/SPEC-api.md](docs/SPEC-api.md)。

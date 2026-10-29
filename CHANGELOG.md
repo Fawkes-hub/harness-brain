@@ -2,9 +2,17 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号采用 [语义化版本](https://semver.org/lang/zh-CN/)。
-数据格式与 API 的兼容边界见 `docs/SPEC-api.md` 与 `docs/DESIGN-v2.md`。
+数据格式与 API 的兼容边界见 `docs/SPEC-api.md` 与 `docs/DESIGN.md`。
 
 ## [Unreleased]
+
+### 计划中
+
+- v2.2 补齐:`secret add/exec`(age 多收件人)、persona 渲染进 `brief` 首段
+- v2.3:SQLite + FTS5(中文 bigram)检索、`scan` 增量重建、`/v1/stats`
+- v3.0:多库(namespace)、MCP Transport、`Store`/`Index` 接口化
+
+## [2.2.2] - 2026-10-29
 
 ### 修复
 
@@ -13,11 +21,10 @@
   于是**发版当天对 tag 的构建必然失败**(detached HEAD),之后的日常提交也必然失败。
 - 门禁本身现在识别「发版验证模式」:detached HEAD 且 tag 指向当前提交时,跳过分支/工作区检查。
 
-### 计划中
+### 新增
 
-- v2.2 补齐：`secret add/exec`（age 多收件人）、persona 渲染进 `brief` 首段
-- v2.3：SQLite + FTS5（中文 bigram）检索、`scan` 增量重建、`/v1/stats`
-- v3.0：多库（namespace）、MCP Transport、`Store`/`Index` 接口化
+- `.github/workflows/release.yml`:打 tag 时构建 `linux/amd64` + `linux/arm64` 多架构镜像并推送到 GHCR。
+  此前 `docker-compose.yml` 引用了一个从未发布过的镜像标签 —— 文档里的快捷方式必须真的能跑。
 
 ## [2.2.1] - 2026-10-29
 
