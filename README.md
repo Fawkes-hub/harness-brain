@@ -62,20 +62,20 @@ docker run -d --name brain \
   -v "$PWD/brain-data:/data" \
   --restart unless-stopped \
   --memory 256m \
-  ghcr.io/__OWNER__/harness-brain:2.2.1
+  ghcr.io/Fawkes-hub/harness-brain:2.2.1
 ```
 
 ### docker compose
 
 ```bash
-git clone https://github.com/__OWNER__/harness-brain.git && cd harness-brain
+git clone https://github.com/Fawkes-hub/harness-brain.git && cd harness-brain
 docker compose up -d          # data lands in ./data
 ```
 
 ### Bare metal (systemd, no Docker)
 
 ```bash
-git clone https://github.com/__OWNER__/harness-brain.git /opt/harness-brain
+git clone https://github.com/Fawkes-hub/harness-brain.git /opt/harness-brain
 sudo useradd -r -s /usr/sbin/nologin brain
 sudo mkdir -p /srv/brain && sudo chown brain: /srv/brain
 sudo -u brain BRAIN_ROOT=/srv/brain python3 /opt/harness-brain/bin/brain serve --bind 0.0.0.0 --port 8790
@@ -246,7 +246,7 @@ Issues and PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Securi
 ```bash
 # 1) 起服务(容器,数据在 ./data)
 docker run -d --name brain -p 127.0.0.1:8790:8790 -v "$PWD/brain-data:/data" \
-  --restart unless-stopped ghcr.io/__OWNER__/harness-brain:2.2.1
+  --restart unless-stopped ghcr.io/Fawkes-hub/harness-brain:2.2.1
 
 # 2) 给每台机器签一把自己的令牌(明文只显示一次)
 BRAIN_ROOT=./brain-data ./bin/brain token issue --host laptop --harness cli --role engineer

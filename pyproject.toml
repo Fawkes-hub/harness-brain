@@ -25,10 +25,10 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/__OWNER__/harness-brain"
-Documentation = "https://github.com/__OWNER__/harness-brain/tree/main/docs"
-Changelog = "https://github.com/__OWNER__/harness-brain/blob/main/CHANGELOG.md"
-Issues = "https://github.com/__OWNER__/harness-brain/issues"
+Homepage = "https://github.com/Fawkes-hub/harness-brain"
+Documentation = "https://github.com/Fawkes-hub/harness-brain/tree/main/docs"
+Changelog = "https://github.com/Fawkes-hub/harness-brain/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Fawkes-hub/harness-brain/issues"
 
 [tool.setuptools]
 packages = ["brainlib"]
