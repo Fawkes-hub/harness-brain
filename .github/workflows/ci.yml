@@ -24,7 +24,7 @@ jobs:
       - name: 单元测试
         run: python -m unittest discover -s tests -v
       - name: 版本号与 CHANGELOG 一致
-        run: python tools/release.py
+        run: python tools/release.py --check
 
   privacy:
     runs-on: ubuntu-latest

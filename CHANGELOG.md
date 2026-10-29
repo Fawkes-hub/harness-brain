@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 修复
+
+- `tools/release.py` 新增 `--check` 模式(只校验版本号与 CHANGELOG 一致、版本字面量唯一),
+  CI 改用它。此前 CI 直接跑完整门禁,而门禁要求「在 main 上且 tag 不存在或不指向 HEAD」——
+  于是**发版当天对 tag 的构建必然失败**(detached HEAD),之后的日常提交也必然失败。
+- 门禁本身现在识别「发版验证模式」:detached HEAD 且 tag 指向当前提交时,跳过分支/工作区检查。
+
 ### 计划中
 
 - v2.2 补齐：`secret add/exec`（age 多收件人）、persona 渲染进 `brief` 首段
